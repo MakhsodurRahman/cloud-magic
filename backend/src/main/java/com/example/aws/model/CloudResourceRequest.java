@@ -1,17 +1,32 @@
 package com.example.aws.model;
 
 import java.util.List;
+import java.util.Map;
 
-public class Ec2ConfigRequest {
+public class CloudResourceRequest {
+    private String serviceType; // "EC2" or "S3"
+    private String region;
+    
+    // EC2 Specific
     private String instanceName;
     private String amiId;
     private String instanceType;
     private String keyPairName;
     private List<Integer> securityGroupPorts;
     private int ebsVolumeSize;
-    private String region;
+    
+    // S3 Specific
+    private String bucketName;
+    private boolean versioningEnabled;
+    private String acl; // e.g., "private", "public-read"
 
     // Getters and Setters
+    public String getServiceType() { return serviceType; }
+    public void setServiceType(String serviceType) { this.serviceType = serviceType; }
+
+    public String getRegion() { return region; }
+    public void setRegion(String region) { this.region = region; }
+
     public String getInstanceName() { return instanceName; }
     public void setInstanceName(String instanceName) { this.instanceName = instanceName; }
 
@@ -30,6 +45,12 @@ public class Ec2ConfigRequest {
     public int getEbsVolumeSize() { return ebsVolumeSize; }
     public void setEbsVolumeSize(int ebsVolumeSize) { this.ebsVolumeSize = ebsVolumeSize; }
 
-    public String getRegion() { return region; }
-    public void setRegion(String region) { this.region = region; }
+    public String getBucketName() { return bucketName; }
+    public void setBucketName(String bucketName) { this.bucketName = bucketName; }
+
+    public boolean isVersioningEnabled() { return versioningEnabled; }
+    public void setVersioningEnabled(boolean versioningEnabled) { this.versioningEnabled = versioningEnabled; }
+
+    public String getAcl() { return acl; }
+    public void setAcl(String acl) { this.acl = acl; }
 }
