@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 public class TerraformService {
@@ -34,10 +33,6 @@ public class TerraformService {
             sb.append("provider \"aws\" {\n");
             sb.append("  region = \"").append(stack.getRegion()).append("\"\n");
             sb.append("}\n\n");
-        } else if ("azure".equals(provider)) {
-            sb.append("provider \"azurerm\" {\n  features {}\n}\n\n");
-        } else if ("gcp".equals(provider)) {
-            sb.append("provider \"google\" {\n  project = \"YOUR_PROJECT_ID\"\n  region  = \"").append(stack.getRegion()).append("\"\n}\n\n");
         }
 
         if (stack.getResources() != null) {
@@ -52,12 +47,77 @@ public class TerraformService {
     }
 
     private void generateEc2Code(CloudResourceRequest config, StringBuilder sb) {
-        sb.append("resource \"aws_instance\" \"").append(config.getInstanceName().replaceAll("\\s+", "_")).append("\" {\n");
+        generateSecurityGroup(config, sb);
+        String safeName = config.getInstanceName().replaceAll("\\s+", "_");
+        
+        sb.append("resource \"aws_instance\" \"").append(safeName).append("\" {\n");
         sb.append("  ami           = \"").append(config.getAmiId()).append("\"\n");
         sb.append("  instance_type = \"").append(config.getInstanceType()).append("\"\n");
-        sb.append("  key_name      = \"").append(config.getKeyPairName()).append("\"\n\n");
+        sb.append("  key_name      = \"").append(config.getKeyPairName()).append("\"\n");
+        sb.append("  vpc_security_group_ids = [aws_security_group.magic_sg_").append(safeName).append(".id]\n\n");
+        
+        // BAKE SOFTWARE INTO USER_DATA
+        if (config.getSelectedSoftware() != null && !config.getSelectedSoftware().isEmpty()) {
+            sb.append("  user_data = <<-EOF\n");
+            sb.append("              #!/bin/bash\n");
+            sb.append("              sudo apt-get update -y\n");
+            for (String sw : config.getSelectedSoftware()) {
+                sb.append(getSoftwareScript(sw));
+            }
+            sb.append("              EOF\n\n");
+        }
+
         sb.append("  root_block_device {\n    volume_size = ").append(config.getEbsVolumeSize()).append("\n  }\n\n");
         sb.append("  tags = {\n    Name = \"").append(config.getInstanceName()).append("\"\n  }\n}\n\n");
+    }
+
+    private String getSoftwareScript(String software) {
+        switch (software.toLowerCase()) {
+            case "redis":
+                return "              sudo apt-get install -y redis-server\n" +
+                       "              sudo systemctl enable redis-server\n" +
+                       "              sudo systemctl start redis-server\n";
+            case "nginx":
+                return "              sudo apt-get install -y nginx\n" +
+                       "              sudo systemctl enable nginx\n" +
+                       "              sudo systemctl start nginx\n";
+            case "kafka":
+                return "              sudo apt-get install -y default-jdk\n" +
+                       "              wget https://downloads.apache.org/kafka/3.7.0/kafka_2.13-3.7.0.tgz\n" +
+                       "              tar -xzf kafka_2.13-3.7.0.tgz\n" +
+                       "              mv kafka_2.13-3.7.0 /home/ubuntu/kafka\n";
+            case "utilities":
+                return "              sudo apt-get install -y git curl wget unzip build-essential\n";
+            default:
+                return "";
+        }
+    }
+
+    private void generateSecurityGroup(CloudResourceRequest config, StringBuilder sb) {
+        String safeName = config.getInstanceName().replaceAll("\\s+", "_");
+        sb.append("resource \"aws_security_group\" \"magic_sg_").append(safeName).append("\" {\n");
+        sb.append("  name        = \"magic-sg-").append(safeName).append("\"\n");
+        sb.append("  description = \"Allow traffic for ").append(config.getInstanceName()).append("\"\n\n");
+
+        // Sync ports with software
+        List<Integer> ports = new ArrayList<>(config.getSecurityGroupPorts());
+        if (config.getSelectedSoftware() != null) {
+            if (config.getSelectedSoftware().contains("Redis") && !ports.contains(6379)) ports.add(6379);
+            if (config.getSelectedSoftware().contains("Nginx") && !ports.contains(80)) ports.add(80);
+            if (config.getSelectedSoftware().contains("Kafka") && !ports.contains(9092)) ports.add(9092);
+        }
+
+        for (Integer port : ports) {
+            sb.append("  ingress {\n");
+            sb.append("    from_port   = ").append(port).append("\n");
+            sb.append("    to_port     = ").append(port).append("\n");
+            sb.append("    protocol    = \"tcp\"\n");
+            sb.append("    cidr_blocks = [\"0.0.0.0/0\"]\n");
+            sb.append("  }\n\n");
+        }
+
+        sb.append("  egress {\n");
+        sb.append("    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n}\n\n");
     }
 
     private void generateS3Code(CloudResourceRequest config, StringBuilder sb) {
@@ -135,33 +195,26 @@ public class TerraformService {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error ensuring key pair via SDK: " + e.getMessage());
+            System.err.println("Key Pair check failed: " + e.getMessage());
         }
     }
 
     private void runProcess(String[] command, StringBuilder output, InfrastructureStackRequest stack) throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(new File(TERRAFORM_DIR));
-        pb.redirectErrorStream(true);
-        injectCredentials(pb, stack);
+        
+        Map<String, String> env = pb.environment();
+        env.put("AWS_ACCESS_KEY_ID", stack.getAccessKey());
+        env.put("AWS_SECRET_ACCESS_KEY", stack.getSecretKey());
+        env.put("AWS_DEFAULT_REGION", stack.getRegion());
         
         Process process = pb.start();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;
-            while ((line = reader.readLine()) != null) output.append(line).append("\n");
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
         }
         process.waitFor();
-    }
-
-    private void injectCredentials(ProcessBuilder pb, InfrastructureStackRequest stack) {
-        if ("aws".equalsIgnoreCase(stack.getCloudProvider())) {
-            if (stack.getAccessKey() != null && !stack.getAccessKey().isEmpty()) {
-                pb.environment().put("AWS_ACCESS_KEY_ID", stack.getAccessKey());
-            }
-            if (stack.getSecretKey() != null && !stack.getSecretKey().isEmpty()) {
-                pb.environment().put("AWS_SECRET_ACCESS_KEY", stack.getSecretKey());
-            }
-            pb.environment().put("AWS_DEFAULT_REGION", stack.getRegion());
-        }
     }
 }

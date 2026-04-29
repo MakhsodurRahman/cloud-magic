@@ -29,8 +29,17 @@ const App = () => {
     bucketName: 'my-magic-bucket-' + Math.floor(Math.random() * 10000),
     versioningEnabled: false,
     acl: 'private',
-    installRedis: false
+    selectedSoftware: []
   });
+
+  const toggleSoftware = (software) => {
+    setFormData(prev => {
+      const list = prev.selectedSoftware.includes(software)
+        ? prev.selectedSoftware.filter(s => s !== software)
+        : [...prev.selectedSoftware, software];
+      return { ...prev, selectedSoftware: list };
+    });
+  };
 
   const [terraformCode, setTerraformCode] = useState('');
   const [deploying, setDeploying] = useState(false);
@@ -72,6 +81,36 @@ const App = () => {
       }, 5000);
     } catch (err) {
       setOutput(prev => prev + `\nFix failed: ${err.message}`);
+      setInstalling(false);
+    }
+  };
+
+  const handleInstallSingle = async (software) => {
+    const instance = runningInstances.find(i => i.id === selectedInstanceId);
+    if (!instance) return;
+
+    setInstalling(true);
+    setOutput(prev => prev + `\nInitiating installation of ${software} on ${instance.name} (${instance.ip})...\n`);
+    
+    try {
+      const response = await fetch('http://localhost:8080/api/software/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: instance.ip,
+          user: sshUser,
+          password: softwarePassword,
+          keyName: resourceStack.find(r => r.instanceName === instance.name)?.keyPairName,
+          softwareList: [software]
+        })
+      });
+      const result = await response.text();
+      setOutput(prev => prev + result);
+      if (result.toLowerCase().includes('timeout')) setShowFixSsh(true);
+    } catch (err) {
+      setOutput(prev => prev + `\nInstallation failed: ${err.message}`);
+      if (err.message.toLowerCase().includes('timeout')) setShowFixSsh(true);
+    } finally {
       setInstalling(false);
     }
   };
@@ -197,6 +236,9 @@ const App = () => {
       if (endpoint.includes('key-pairs') && data.length > 0) {
         setFormData(prev => ({ ...prev, keyPairName: data[0] }));
       }
+      if (endpoint.includes('instance-types') && data.length > 0) {
+        setFormData(prev => ({ ...prev, instanceType: data[0] }));
+      }
     } catch (err) {
       console.warn(`Could not fetch metadata for ${endpoint}`);
     } finally {
@@ -218,7 +260,7 @@ const App = () => {
       ...formData, 
       securityGroupPorts: ports,
       ebsVolumeSize: parseInt(formData.ebsVolumeSize) || 20,
-      installRedis: activeService === 'EC2' ? formData.installRedis : false,
+      selectedSoftware: activeService === 'EC2' ? [...formData.selectedSoftware] : [],
       serviceType: activeService, 
       id: Date.now() 
     };
@@ -268,50 +310,7 @@ const App = () => {
       }
       setDeploymentStatus({ step: 'Success', status: 'success', message: 'Infrastructure deployed successfully!' });
       
-      // Phase 5: Unified Software Orchestration
-      const softwareTasks = resourceStack.filter(r => r.installRedis);
-      if (softwareTasks.length > 0) {
-        setDeploymentStatus({ step: 'Software', status: 'loading', message: 'Orchestrating Magic Add-ons...' });
-        setOutput(prev => prev + '\n--- Stage: Unified Software Orchestration ---\n');
-        
-        // Wait for instances to boot and refresh the instance list
-        setOutput(prev => prev + 'Waiting for cloud instances to initialize (15s)...\n');
-        await new Promise(r => setTimeout(r, 15000));
-        
-        // Fetch fresh instances to get IPs
-        const response = await fetch(`http://localhost:8080/api/aws/instances?region=${region}`, {
-          headers: { 'X-AWS-Access-Key': credentials.accessKey, 'X-AWS-Secret-Key': credentials.secretKey }
-        });
-        const liveInstances = await response.json();
-
-        for (const task of softwareTasks) {
-          const liveInst = liveInstances.find(i => i.name === task.instanceName);
-          if (liveInst) {
-            setOutput(prev => prev + `Installing Redis on ${task.instanceName} (${liveInst.ip})...\n`);
-            
-            // 1. Auto-Fix Connection
-            await fetch(`http://localhost:8080/api/aws/fix-ssh?instanceId=${liveInst.id}&region=${region}`, {
-              method: 'POST',
-              headers: { 'X-AWS-Access-Key': credentials.accessKey, 'X-AWS-Secret-Key': credentials.secretKey }
-            });
-
-            // 2. Install Redis
-            const installRes = await fetch('http://localhost:8080/api/software/install-redis', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                host: liveInst.ip,
-                user: 'ubuntu',
-                keyName: task.keyPairName
-              })
-            });
-            const log = await installRes.text();
-            setOutput(prev => prev + log + '\n');
-          }
-        }
-        setDeploymentStatus({ step: 'Complete', status: 'success', message: 'Infrastructure & Software are Ready!' });
-      }
-
+      setDeploymentStatus({ step: 'Success', status: 'success', message: 'Infrastructure & Software are being provisioned via Terraform!' });
     } catch (err) {
       setDeploymentStatus({ step: 'Failed', status: 'error', message: err.message });
       setOutput(prev => prev + '\nDeployment aborted.');
@@ -606,18 +605,52 @@ const App = () => {
                   </div>
                 </div>
 
-                <div style={{ marginTop: '32px', display: 'flex', gap: '16px' }}>
-                  <button 
-                    className="btn btn-primary" 
-                    onClick={handleInstallRedis} 
-                    disabled={installing || runningInstances.length === 0}
-                  >
-                    {installing ? <Loader2 className="animate-spin" size={18} /> : <Database size={18} />}
-                    {installing ? 'Installing Redis...' : 'Install Redis'}
-                  </button>
-                  <button className="btn" onClick={fetchInstances} style={{ border: '1px solid var(--panel-border)' }}>
-                    <RefreshCw size={18} /> Refresh List
-                  </button>
+                <div className="config-panel" style={{ marginTop: '24px' }}>
+                  <h3 style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Server size={20} color="var(--accent-color)" /> Available Software Catalog
+                  </h3>
+                  
+                  <table style={{ width: '100%', borderCollapse: 'collapse', borderRadius: '12px', overflow: 'hidden' }}>
+                    <thead>
+                      <tr style={{ background: 'var(--panel-bg)', textAlign: 'left', fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
+                        <th style={{ padding: '16px' }}>Software</th>
+                        <th style={{ padding: '16px' }}>Description</th>
+                        <th style={{ padding: '16px', textAlign: 'right' }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { id: 'Redis', icon: <Database size={18} />, desc: 'High-performance In-memory Data Store' },
+                        { id: 'Nginx', icon: <Globe size={18} />, desc: 'Professional Web Server & Reverse Proxy' },
+                        { id: 'Kafka', icon: <Cpu size={18} />, desc: 'Distributed Event Streaming Platform' },
+                        { id: 'Utilities', icon: <Server size={18} />, desc: 'Standard Linux Tools (git, curl, build-essential)' }
+                      ].map(sw => (
+                        <tr key={sw.id} style={{ borderBottom: '1px solid var(--panel-border)', transition: 'background 0.2s' }}>
+                          <td style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '12px', fontWeight: 600 }}>
+                            <div style={{ background: 'var(--panel-bg)', padding: '8px', borderRadius: '8px' }}>{sw.icon}</div>
+                            {sw.id}
+                          </td>
+                          <td style={{ padding: '16px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{sw.desc}</td>
+                          <td style={{ padding: '16px', textAlign: 'right' }}>
+                            <button 
+                              className="btn btn-primary" 
+                              onClick={() => handleInstallSingle(sw.id)}
+                              disabled={installing || !selectedInstanceId}
+                              style={{ padding: '6px 16px', fontSize: '0.8rem' }}
+                            >
+                              Install {sw.id}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  
+                  <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button className="btn" onClick={fetchInstances} style={{ border: '1px solid var(--panel-border)', fontSize: '0.8rem' }}>
+                      <RefreshCw size={14} /> Refresh Machine List
+                    </button>
+                  </div>
                 </div>
 
                 {showFixSsh && (
@@ -695,19 +728,26 @@ const App = () => {
                         </div>
                         <div className="field-group" style={{ gridColumn: 'span 2', marginTop: '10px' }}>
                           <label>Magic Software Add-ons</label>
-                          <div style={{ display: 'flex', gap: '24px', padding: '16px', background: 'var(--input-bg)', borderRadius: '12px', border: '1px solid var(--panel-border)' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', width: 'auto', fontWeight: 600 }}>
-                              <input 
-                                type="checkbox" 
-                                checked={formData.installRedis} 
-                                onChange={(e) => setFormData({...formData, installRedis: e.target.checked})} 
-                              />
-                              <Database size={16} color="var(--accent-color)" /> Install Redis
-                            </label>
-                            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
-                              Auto-configures Security Groups and installs software after deployment.
-                            </span>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', padding: '20px', background: 'var(--input-bg)', borderRadius: '16px', border: '1px solid var(--panel-border)' }}>
+                            {[
+                              { id: 'Redis', icon: <Database size={16} /> },
+                              { id: 'Nginx', icon: <Globe size={16} /> },
+                              { id: 'Kafka', icon: <Cpu size={16} /> },
+                              { id: 'Utilities', icon: <Server size={16} /> }
+                            ].map(sw => (
+                              <label key={sw.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontWeight: 600 }}>
+                                <input 
+                                  type="checkbox" 
+                                  checked={formData.selectedSoftware.includes(sw.id)} 
+                                  onChange={() => toggleSoftware(sw.id)} 
+                                />
+                                {sw.icon} {sw.id}
+                              </label>
+                            ))}
                           </div>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '8px' }}>
+                            Selected tools will be automatically installed and configured after provisioning.
+                          </p>
                         </div>
                       </>
                     ) : (

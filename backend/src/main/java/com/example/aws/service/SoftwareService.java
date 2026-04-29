@@ -4,56 +4,43 @@ import com.jcraft.jsch.*;
 import org.springframework.stereotype.Service;
 import java.io.*;
 import java.nio.file.*;
-import java.util.Properties;
+import java.util.*;
 
 @Service
 public class SoftwareService {
 
     private static final String TERRAFORM_DIR = "terraform-workdir";
 
-    public String installRedis(String host, String user, String password, String keyName) {
+    public String installSoftware(String host, String user, String password, String keyName, List<String> softwareList) {
         StringBuilder output = new StringBuilder();
         Session session = null;
         try {
             JSch jsch = new JSch();
-            
-            // Priority 1: Use Private Key if keyName is provided
             if (keyName != null && !keyName.isEmpty()) {
                 Path keyPath = Paths.get(TERRAFORM_DIR, keyName + ".pem");
-                if (Files.exists(keyPath)) {
-                    jsch.addIdentity(keyPath.toString());
-                }
+                if (Files.exists(keyPath)) jsch.addIdentity(keyPath.toString());
             }
 
             session = jsch.getSession(user, host, 22);
-            
-            // Priority 2: Use Password if provided
-            if (password != null && !password.isEmpty()) {
-                session.setPassword(password);
-            }
+            if (password != null && !password.isEmpty()) session.setPassword(password);
 
             Properties config = new Properties();
             config.put("StrictHostKeyChecking", "no");
             session.setConfig(config);
             session.connect(30000);
 
-            output.append("Connected to ").append(host).append("\n");
+            output.append("Connected to ").append(host).append(" as ").append(user).append("\n");
 
-            // Commands to install Redis
-            String[] commands = {
-                "sudo apt-get update -y",
-                "sudo apt-get install -y redis-server",
-                "sudo systemctl enable redis-server",
-                "sudo systemctl start redis-server",
-                "redis-cli ping"
-            };
-
-            for (String cmd : commands) {
-                output.append("Executing: ").append(cmd).append("\n");
-                output.append(executeCommand(session, cmd)).append("\n");
+            for (String software : softwareList) {
+                output.append("\n--- Installing ").append(software).append(" ---\n");
+                String[] commands = getCommandsForSoftware(software);
+                for (String cmd : commands) {
+                    output.append("Executing: ").append(cmd).append("\n");
+                    output.append(executeCommand(session, cmd)).append("\n");
+                }
             }
 
-            output.append("\nRedis installation completed successfully!");
+            output.append("\nAll selected software installed successfully!");
 
         } catch (Exception e) {
             output.append("Error: ").append(e.getMessage());
@@ -63,12 +50,44 @@ public class SoftwareService {
         return output.toString();
     }
 
+    private String[] getCommandsForSoftware(String software) {
+        switch (software.toLowerCase()) {
+            case "redis":
+                return new String[]{
+                    "sudo apt-get update -y",
+                    "sudo apt-get install -y redis-server",
+                    "sudo systemctl enable redis-server",
+                    "sudo systemctl start redis-server"
+                };
+            case "nginx":
+                return new String[]{
+                    "sudo apt-get update -y",
+                    "sudo apt-get install -y nginx",
+                    "sudo systemctl enable nginx",
+                    "sudo systemctl start nginx"
+                };
+            case "kafka":
+                return new String[]{
+                    "sudo apt-get update -y",
+                    "sudo apt-get install -y default-jdk",
+                    "wget https://downloads.apache.org/kafka/3.7.0/kafka_2.13-3.7.0.tgz",
+                    "tar -xzf kafka_2.13-3.7.0.tgz",
+                    "mv kafka_2.13-3.7.0 kafka"
+                };
+            case "utilities":
+                return new String[]{
+                    "sudo apt-get update -y",
+                    "sudo apt-get install -y git curl wget unzip build-essential"
+                };
+            default:
+                return new String[]{"echo 'Unknown software: " + software + "'"};
+        }
+    }
+
     private String executeCommand(Session session, String command) throws Exception {
         ChannelExec channel = (ChannelExec) session.openChannel("exec");
         channel.setCommand(command);
         channel.setInputStream(null);
-        channel.setErrStream(System.err);
-
         InputStream in = channel.getInputStream();
         channel.connect();
 
@@ -80,10 +99,7 @@ public class SoftwareService {
                 if (i < 0) break;
                 res.append(new String(tmp, 0, i));
             }
-            if (channel.isClosed()) {
-                if (in.available() > 0) continue;
-                break;
-            }
+            if (channel.isClosed()) break;
             try { Thread.sleep(1000); } catch (Exception ee) {}
         }
         channel.disconnect();

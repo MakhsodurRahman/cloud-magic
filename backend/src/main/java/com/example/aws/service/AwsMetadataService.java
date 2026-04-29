@@ -76,13 +76,21 @@ public class AwsMetadataService {
     }
 
     public List<String> getInstanceTypes(String region, String accessKey, String secretKey) {
-        AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
-        DescribeInstanceTypesRequest request = new DescribeInstanceTypesRequest()
-                .withFilters(new Filter("instance-type").withValues("t3.micro", "t2.micro", "t3.small", "c7i-flex.large"));
+        try {
+            AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+            DescribeInstanceTypesRequest request = new DescribeInstanceTypesRequest()
+                    .withFilters(new Filter("instance-type").withValues("t3.micro", "t2.micro", "t3.small", "c7i-flex.large"));
 
-        return ec2.describeInstanceTypes(request).getInstanceTypes().stream()
-                .map(InstanceTypeInfo::getInstanceType)
-                .collect(Collectors.toList());
+            List<String> types = ec2.describeInstanceTypes(request).getInstanceTypes().stream()
+                    .map(InstanceTypeInfo::getInstanceType)
+                    .collect(Collectors.toList());
+            
+            if (!types.isEmpty()) return types;
+        } catch (Exception e) {
+            System.err.println("AWS Instance Type fetch failed, using fallback: " + e.getMessage());
+        }
+        // Fallback for reliability
+        return Arrays.asList("t2.micro", "t3.micro", "t3.small", "c7i-flex.large");
     }
 
     public List<String> getKeyPairs(String region, String accessKey, String secretKey) {
