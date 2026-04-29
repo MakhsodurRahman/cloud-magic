@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Server, Shield, Database, Globe, Play, Code, CheckCircle2, Loader2, Plus, Trash2, Terminal, Box, AlertTriangle, RefreshCw, Sun, Moon, Cpu, Cloud } from 'lucide-react';
+import { Server, Shield, Database, Globe, Play, Code, CheckCircle2, Loader2, Plus, Trash2, Terminal, Box, AlertTriangle, RefreshCw, Sun, Moon, Cpu, Cloud, GitBranch } from 'lucide-react';
 
 const App = () => {
   const [activeService, setActiveService] = useState('EC2');
@@ -48,7 +48,12 @@ const App = () => {
     bucketName: 'my-magic-bucket-' + Math.floor(Math.random() * 10000),
     versioningEnabled: false,
     acl: 'private',
-    selectedSoftware: []
+    selectedSoftware: [],
+    pipelineName: 'my-app-pipeline',
+    repoUrl: '',
+    branch: 'main',
+    targetInstanceId: '',
+    buildCommands: 'npm test'
   });
 
   const toggleSoftware = (software) => {
@@ -428,6 +433,9 @@ const App = () => {
               <div className={`nav-item ${activeService === 'Software' ? 'active' : ''}`} onClick={() => setActiveService('Software')}>
                 <Cpu size={18} /> <span>Software</span>
               </div>
+              <div className={`nav-item ${activeService === 'PIPELINE' ? 'active' : ''}`} onClick={() => setActiveService('PIPELINE')}>
+                <GitBranch size={18} /> <span>CI/CD</span>
+              </div>
             </nav>
 
             <div className="field-group">
@@ -802,12 +810,47 @@ const App = () => {
                           </p>
                         </div>
                       </>
-                    ) : (
-                      <>
-                        <div className="field-group">
-                          <label>Bucket Name</label>
-                          <input name="bucketName" value={formData.bucketName} onChange={handleChange} />
-                        </div>
+                      ) : activeService === 'PIPELINE' ? (
+                        <>
+                          <div className="field-group">
+                            <label>Pipeline Name</label>
+                            <input name="pipelineName" value={formData.pipelineName || ''} onChange={handleChange} placeholder="e.g. nodejs-prod-pipeline" />
+                          </div>
+                          <div className="field-group">
+                            <label>GitHub Repo ID</label>
+                            <input name="repoUrl" value={formData.repoUrl || ''} onChange={handleChange} placeholder="e.g. makhsodur/my-node-app" />
+                          </div>
+                          <div className="field-group">
+                            <label>Source Branch</label>
+                            <input name="branch" value={formData.branch || 'main'} onChange={handleChange} />
+                          </div>
+                          <div className="field-group">
+                            <label>Target Instance</label>
+                            <select name="targetInstanceId" value={formData.targetInstanceId || ''} onChange={handleChange}>
+                              <option value="">-- Select Running EC2 --</option>
+                              {runningInstances.map(instance => (
+                                <option key={instance.id} value={instance.name}>{instance.name} ({instance.id})</option>
+                              ))}
+                            </select>
+                            <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '4px' }}>Only running instances in {region} are shown.</p>
+                          </div>
+                          <div className="field-group" style={{ gridColumn: 'span 2' }}>
+                            <label>Build Commands (NPM)</label>
+                            <textarea 
+                              name="buildCommands" 
+                              value={formData.buildCommands || 'npm test'} 
+                              onChange={handleChange} 
+                              placeholder="e.g. npm test && npm run build"
+                              style={{ width: '100%', height: '80px', padding: '12px', background: 'var(--input-bg)', color: 'var(--text-primary)', border: '1px solid var(--panel-border)', borderRadius: '12px' }}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="field-group">
+                            <label>Bucket Name</label>
+                            <input name="bucketName" value={formData.bucketName} onChange={handleChange} />
+                          </div>
                         <div className="field-group">
                           <label>ACL / Privacy</label>
                           <select name="acl" value={formData.acl} onChange={handleChange}>

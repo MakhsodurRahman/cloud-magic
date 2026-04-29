@@ -21,6 +21,25 @@ public class CloudResourceRequest {
     private String acl; // e.g., "private", "public-read"
     private List<String> selectedSoftware;
 
+    // CI/CD Specific
+    private String pipelineName;
+    private String repoUrl;
+    private String branch;
+    private String targetInstanceId;
+    private String buildCommands;
+
+    // Getters and Setters
+    public String getPipelineName() { return pipelineName; }
+    public void setPipelineName(String pipelineName) { this.pipelineName = pipelineName; }
+    public String getRepoUrl() { return repoUrl; }
+    public void setRepoUrl(String repoUrl) { this.repoUrl = repoUrl; }
+    public String getBranch() { return branch; }
+    public void setBranch(String branch) { this.branch = branch; }
+    public String getTargetInstanceId() { return targetInstanceId; }
+    public void setTargetInstanceId(String targetInstanceId) { this.targetInstanceId = targetInstanceId; }
+    public String getBuildCommands() { return buildCommands; }
+    public void setBuildCommands(String buildCommands) { this.buildCommands = buildCommands; }
+
     // Getters and Setters
     public List<String> getSelectedSoftware() { return selectedSoftware; }
     public void setSelectedSoftware(List<String> selectedSoftware) { this.selectedSoftware = selectedSoftware; }

@@ -41,20 +41,119 @@ public class TerraformService {
                 if ("aws".equals(provider)) {
                     if ("EC2".equalsIgnoreCase(config.getServiceType())) generateEc2Code(config, sb);
                     else if ("S3".equalsIgnoreCase(config.getServiceType())) generateS3Code(config, sb);
+                    else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) generatePipelineCode(config, sb);
                 }
             }
         }
         return sb.toString();
     }
 
+    private void generatePipelineCode(CloudResourceRequest config, StringBuilder sb) {
+        String safeName = config.getPipelineName().replaceAll("[^a-zA-Z0-9]", "_");
+        String bucketName = "pipeline-artifacts-" + safeName.toLowerCase().replace("_", "-") + "-" + System.currentTimeMillis();
+
+        sb.append("# 🚀 Magic CI/CD Pipeline (Fast Mode): ").append(config.getPipelineName()).append("\n");
+        sb.append("# NOTE: Manually authorize GitHub connection in AWS Console > Settings > Connections\n\n");
+
+        // 1. Artifact Bucket
+        sb.append("resource \"aws_s3_bucket\" \"pipeline_artifacts_").append(safeName).append("\" {\n");
+        sb.append("  bucket = \"").append(bucketName).append("\"\n  force_destroy = true\n}\n\n");
+
+        // 2. GitHub Connection
+        sb.append("resource \"aws_codestarconnections_connection\" \"github_").append(safeName).append("\" {\n");
+        sb.append("  name          = \"github-").append(safeName).append("\"\n");
+        sb.append("  provider_type = \"GitHub\"\n}\n\n");
+
+        // 3. IAM Roles
+        generatePipelineIamRoles(safeName, sb);
+
+        // 4. CodeBuild Project (Handles Build & Deploy)
+        sb.append("resource \"aws_codebuild_project\" \"").append(safeName).append("\" {\n");
+        sb.append("  name          = \"").append(config.getPipelineName()).append("\"\n");
+        sb.append("  service_role  = aws_iam_role.codebuild_role_").append(safeName).append(".arn\n");
+        sb.append("  artifacts { type = \"CODEPIPELINE\" }\n");
+        sb.append("  environment {\n");
+        sb.append("    compute_type = \"BUILD_GENERAL1_SMALL\"\n");
+        sb.append("    image        = \"aws/codebuild/amazonlinux2-x86_64-standard:5.0\"\n");
+        sb.append("    type         = \"LINUX_CONTAINER\"\n");
+        sb.append("    environment_variable {\n      name  = \"TARGET_INSTANCE_NAME\"\n      value = \"").append(config.getTargetInstanceId()).append("\"\n    }\n");
+        sb.append("    environment_variable {\n      name  = \"ARTIFACT_BUCKET\"\n      value = aws_s3_bucket.pipeline_artifacts_").append(safeName).append(".bucket\n    }\n  }\n");
+        sb.append("  source {\n    type = \"CODEPIPELINE\"\n");
+        sb.append("    buildspec = <<-BUILDSPEC\n");
+        sb.append("      version: 0.2\n");
+        sb.append("      phases:\n");
+        sb.append("        install:\n");
+        sb.append("          runtime-versions:\n            nodejs: 20\n");
+        sb.append("        build:\n");
+        sb.append("          commands:\n");
+        sb.append("            - npm install\n");
+        sb.append("            - ").append(config.getBuildCommands() != null ? config.getBuildCommands() : "npm run build").append("\n");
+        sb.append("        post_build:\n");
+        sb.append("          commands:\n");
+        sb.append("            - echo \"Deploying to EC2 via SSM...\"\n");
+        sb.append("            - zip -r app.zip .\n");
+        sb.append("            - aws s3 cp app.zip s3://$ARTIFACT_BUCKET/app.zip\n");
+        sb.append("            - |\n");
+        sb.append("              INSTANCE_ID=$(aws ec2 describe-instances --filters \"Name=tag:Name,Values=$TARGET_INSTANCE_NAME\" \"Name=instance-state-name,Values=running\" --query \"Reservations[].Instances[0].InstanceId\" --output text)\n");
+        sb.append("              if [ \"$INSTANCE_ID\" != \"None\" ]; then\n");
+        sb.append("                aws ssm send-command --instance-ids \"$INSTANCE_ID\" --document-name \"AWS-RunShellScript\" --parameters 'commands=[\"aws s3 cp s3://'\"$ARTIFACT_BUCKET\"'/app.zip /tmp/app.zip\", \"unzip -o /tmp/app.zip -d /var/www/html\", \"rm /tmp/app.zip\"]' --region ").append(config.getRegion()).append("\n");
+        sb.append("              else\n");
+        sb.append("                echo \"Error: Target instance $TARGET_INSTANCE_NAME not found or not running.\"\n");
+        sb.append("                exit 1\n");
+        sb.append("              fi\n");
+        sb.append("      BUILDSPEC\n  }\n}\n\n");
+
+        // 5. The Pipeline (Source -> Build/Deploy)
+        sb.append("resource \"aws_codepipeline\" \"").append(safeName).append("\" {\n");
+        sb.append("  name     = \"").append(config.getPipelineName()).append("\"\n");
+        sb.append("  role_arn = aws_iam_role.pipeline_role_").append(safeName).append(".arn\n");
+        sb.append("  artifact_store {\n    location = aws_s3_bucket.pipeline_artifacts_").append(safeName).append(".bucket\n    type     = \"S3\"\n  }\n\n");
+        
+        sb.append("  stage {\n    name = \"Source\"\n    action {\n      name = \"Source\"\n      category = \"Source\"\n      owner = \"AWS\"\n      provider = \"CodeStarSourceConnection\"\n      version = \"1\"\n      output_artifacts = [\"source_output\"]\n");
+        sb.append("      configuration = {\n        ConnectionArn = aws_codestarconnections_connection.github_").append(safeName).append(".arn\n");
+        String repoSlug = config.getRepoUrl()
+                .replace("https://github.com/", "")
+                .replace(".git", "");
+        sb.append("        FullRepositoryId = \"").append(repoSlug).append("\"\n");
+        sb.append("        BranchName = \"").append(config.getBranch()).append("\"\n      }\n    }\n  }\n\n");
+
+        sb.append("  stage {\n    name = \"BuildAndDeploy\"\n    action {\n      name = \"BuildAndDeploy\"\n      category = \"Build\"\n      owner = \"AWS\"\n      provider = \"CodeBuild\"\n      version = \"1\"\n      input_artifacts = [\"source_output\"]\n      configuration = { ProjectName = aws_codebuild_project.").append(safeName).append(".name }\n    }\n  }\n}\n\n");
+    }
+
+    private void generatePipelineIamRoles(String safeName, StringBuilder sb) {
+        // Build Role
+        sb.append("resource \"aws_iam_role\" \"codebuild_role_").append(safeName).append("\" {\n");
+        sb.append("  name = \"codebuild-role-").append(safeName).append("\"\n  assume_role_policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = \"sts:AssumeRole\", Effect = \"Allow\", Principal = { Service = \"codebuild.amazonaws.com\" } }] })\n}\n\n");
+        sb.append("resource \"aws_iam_role_policy\" \"codebuild_policy_").append(safeName).append("\" {\n");
+        sb.append("  role = aws_iam_role.codebuild_role_").append(safeName).append(".name\n  policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = [\"logs:*\", \"s3:*\", \"codebuild:*\", \"ssm:SendCommand\", \"ssm:GetCommandInvocation\", \"ec2:DescribeInstances\"], Resource = \"*\", Effect = \"Allow\" }] })\n}\n\n");
+
+        // Pipeline Role
+        sb.append("resource \"aws_iam_role\" \"pipeline_role_").append(safeName).append("\" {\n");
+        sb.append("  name = \"pipeline-role-").append(safeName).append("\"\n  assume_role_policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = \"sts:AssumeRole\", Effect = \"Allow\", Principal = { Service = \"codepipeline.amazonaws.com\" } }] })\n}\n\n");
+        sb.append("resource \"aws_iam_role_policy\" \"pipeline_policy_").append(safeName).append("\" {\n");
+        sb.append("  role = aws_iam_role.pipeline_role_").append(safeName).append(".name\n  policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = [\"s3:*\", \"codebuild:*\", \"codestar-connections:*\"], Resource = \"*\", Effect = \"Allow\" }] })\n}\n\n");
+    }
+
     private void generateEc2Code(CloudResourceRequest config, StringBuilder sb) {
         generateSecurityGroup(config, sb);
         String safeName = config.getInstanceName().replaceAll("\\s+", "_");
-        
+
+        // Add IAM Instance Profile for SSM and S3
+        sb.append("resource \"aws_iam_role\" \"ec2_role_").append(safeName).append("\" {\n");
+        sb.append("  name = \"ec2-role-").append(safeName).append("\"\n");
+        sb.append("  assume_role_policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = \"sts:AssumeRole\", Effect = \"Allow\", Principal = { Service = \"ec2.amazonaws.com\" } }] })\n}\n\n");
+        sb.append("resource \"aws_iam_role_policy_attachment\" \"ec2_ssm_").append(safeName).append("\" {\n");
+        sb.append("  role       = aws_iam_role.ec2_role_").append(safeName).append(".name\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore\"\n}\n\n");
+        sb.append("resource \"aws_iam_role_policy_attachment\" \"ec2_s3_").append(safeName).append("\" {\n");
+        sb.append("  role       = aws_iam_role.ec2_role_").append(safeName).append(".name\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess\"\n}\n\n");
+        sb.append("resource \"aws_iam_instance_profile\" \"ec2_profile_").append(safeName).append("\" {\n");
+        sb.append("  name = \"ec2-profile-").append(safeName).append("\"\n  role = aws_iam_role.ec2_role_").append(safeName).append(".name\n}\n\n");
+
         sb.append("resource \"aws_instance\" \"").append(safeName).append("\" {\n");
         sb.append("  ami           = \"").append(config.getAmiId()).append("\"\n");
         sb.append("  instance_type = \"").append(config.getInstanceType()).append("\"\n");
         sb.append("  key_name      = \"").append(config.getKeyPairName()).append("\"\n");
+        sb.append("  iam_instance_profile = aws_iam_instance_profile.ec2_profile_").append(safeName).append(".name\n");
         sb.append("  vpc_security_group_ids = [aws_security_group.magic_sg_").append(safeName).append(".id]\n\n");
         
         if (config.getSelectedSoftware() != null && !config.getSelectedSoftware().isEmpty()) {
