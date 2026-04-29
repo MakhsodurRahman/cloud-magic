@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Server, Shield, Database, Globe, Play, Code, CheckCircle2, Loader2, Plus, Trash2, Box, AlertTriangle, RefreshCw, Sun, Moon, Cpu, Cloud } from 'lucide-react';
+import { Server, Shield, Database, Globe, Play, Code, CheckCircle2, Loader2, Plus, Trash2, Terminal, Box, AlertTriangle, RefreshCw, Sun, Moon, Cpu, Cloud } from 'lucide-react';
 
 const App = () => {
   const [activeService, setActiveService] = useState('EC2');
@@ -10,6 +10,25 @@ const App = () => {
   const [credentials, setCredentials] = useState({ accessKey: '', secretKey: '' });
   const [deploymentStatus, setDeploymentStatus] = useState({ step: '', status: '', message: '' });
   const [isConnected, setIsConnected] = useState(false);
+  const [pendingKeyFile, setPendingKeyFile] = useState(null);
+
+  const handleKeyUpload = async () => {
+    if (!pendingKeyFile) return;
+    const formData = new FormData();
+    formData.append('file', pendingKeyFile);
+
+    try {
+      const res = await fetch('http://localhost:8080/api/keys/upload', {
+        method: 'POST',
+        body: formData
+      });
+      const msg = await res.text();
+      setOutput(prev => prev + `\nVault: ${msg}\n`);
+      setPendingKeyFile(null);
+    } catch (err) {
+      setOutput(prev => prev + `\nVault Error: ${err.message}\n`);
+    }
+  };
   
   // Dynamic Metadata States
   const [availableRegions, setAvailableRegions] = useState(['us-east-1', 'us-west-2', 'eu-west-1', 'ap-south-1', 'eu-central-1']);
@@ -100,7 +119,7 @@ const App = () => {
           host: instance.ip,
           user: sshUser,
           password: softwarePassword,
-          keyName: resourceStack.find(r => r.instanceName === instance.name)?.keyPairName,
+          keyName: instance.keyName,
           softwareList: [software]
         })
       });
@@ -226,6 +245,11 @@ const App = () => {
       if (credentials.secretKey) headers['X-AWS-Secret-Key'] = credentials.secretKey;
 
       const response = await fetch(`http://localhost:8080/api/aws${endpoint}`, { headers });
+      if (response.status === 401) {
+        setIsConnected(false);
+        setConnectionError('AWS Session Expired or Invalid Credentials. Please reconnect.');
+        return;
+      }
       if (!response.ok) throw new Error('Metadata fetch failed');
       const data = await response.json();
       setter(data);
@@ -603,6 +627,26 @@ const App = () => {
                     <label>SSH Password (Optional)</label>
                     <input type="password" value={softwarePassword} onChange={(e) => setSoftwarePassword(e.target.value)} placeholder="Leave blank if using Key (.pem)" />
                   </div>
+
+                  <div className="field-group">
+                    <label>Import Private Key (.pem)</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input 
+                        type="file" 
+                        accept=".pem" 
+                        onChange={(e) => setPendingKeyFile(e.target.files[0])}
+                        style={{ padding: '8px', fontSize: '0.8rem', background: 'var(--panel-bg)', borderRadius: '8px' }}
+                      />
+                      <button 
+                        className="btn btn-primary" 
+                        onClick={handleKeyUpload}
+                        disabled={!pendingKeyFile}
+                        style={{ whiteSpace: 'nowrap', padding: '0 16px' }}
+                      >
+                        <Shield size={14} /> Upload to Vault
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="config-panel" style={{ marginTop: '24px' }}>
@@ -620,6 +664,10 @@ const App = () => {
                     </thead>
                     <tbody>
                       {[
+                        { id: 'Nodejs', icon: <Cpu size={18} />, desc: 'Modern JavaScript Runtime (Node.js 20 LTS)' },
+                        { id: 'Java', icon: <Database size={18} />, desc: 'OpenJDK Development Kit (JDK)' },
+                        { id: 'Python', icon: <Terminal size={18} />, desc: 'Python 3 with Pip & Dev Headers' },
+                        { id: 'Laravel', icon: <Globe size={18} />, desc: 'PHP Stack with Composer for Laravel' },
                         { id: 'Redis', icon: <Database size={18} />, desc: 'High-performance In-memory Data Store' },
                         { id: 'Nginx', icon: <Globe size={18} />, desc: 'Professional Web Server & Reverse Proxy' },
                         { id: 'Kafka', icon: <Cpu size={18} />, desc: 'Distributed Event Streaming Platform' },
@@ -728,14 +776,18 @@ const App = () => {
                         </div>
                         <div className="field-group" style={{ gridColumn: 'span 2', marginTop: '10px' }}>
                           <label>Magic Software Add-ons</label>
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', padding: '20px', background: 'var(--input-bg)', borderRadius: '16px', border: '1px solid var(--panel-border)' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', padding: '16px', background: 'var(--input-bg)', borderRadius: '16px', border: '1px solid var(--panel-border)' }}>
                             {[
-                              { id: 'Redis', icon: <Database size={16} /> },
-                              { id: 'Nginx', icon: <Globe size={16} /> },
-                              { id: 'Kafka', icon: <Cpu size={16} /> },
-                              { id: 'Utilities', icon: <Server size={16} /> }
+                              { id: 'Nodejs', icon: <Cpu size={14} /> },
+                              { id: 'Java', icon: <Database size={14} /> },
+                              { id: 'Python', icon: <Terminal size={14} /> },
+                              { id: 'Laravel', icon: <Globe size={14} /> },
+                              { id: 'Redis', icon: <Database size={14} /> },
+                              { id: 'Nginx', icon: <Globe size={14} /> },
+                              { id: 'Kafka', icon: <Cpu size={14} /> },
+                              { id: 'Utilities', icon: <Server size={14} /> }
                             ].map(sw => (
-                              <label key={sw.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontWeight: 600 }}>
+                              <label key={sw.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.75rem' }}>
                                 <input 
                                   type="checkbox" 
                                   checked={formData.selectedSoftware.includes(sw.id)} 
@@ -786,8 +838,16 @@ const App = () => {
                     <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#FFBD2E' }}></div>
                     <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#27C93F' }}></div>
                   </div>
-                  <span style={{ fontSize: '0.7rem', fontWeight: 700, opacity: 0.5, marginLeft: '12px' }}>TERRAFORM OUTPUT</span>
-                  <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px' }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 700, opacity: 0.5, marginLeft: '12px', textTransform: 'uppercase' }}>
+                    {activeService === 'Software' ? 'Execution Log' : 'Provisioning Log'}
+                  </span>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <button 
+                      onClick={() => setOutput('')}
+                      style={{ background: 'none', border: 'none', color: '#fff', opacity: 0.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem' }}
+                    >
+                      <Trash2 size={12} /> Clear
+                    </button>
                     <button 
                       onClick={() => setIsLogMaximized(!isLogMaximized)}
                       style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: 'inherit', padding: '4px 12px', borderRadius: '6px', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer' }}

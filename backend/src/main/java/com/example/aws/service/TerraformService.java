@@ -16,6 +16,7 @@ import java.util.*;
 public class TerraformService {
 
     private static final String TERRAFORM_DIR = "terraform-workdir";
+    private static final String VAULT_DIR = "vault/keys"; // Relative to project root
 
     private AmazonEC2 getEc2Client(InfrastructureStackRequest stack) {
         BasicAWSCredentials credentials = new BasicAWSCredentials(stack.getAccessKey(), stack.getSecretKey());
@@ -56,7 +57,6 @@ public class TerraformService {
         sb.append("  key_name      = \"").append(config.getKeyPairName()).append("\"\n");
         sb.append("  vpc_security_group_ids = [aws_security_group.magic_sg_").append(safeName).append(".id]\n\n");
         
-        // BAKE SOFTWARE INTO USER_DATA
         if (config.getSelectedSoftware() != null && !config.getSelectedSoftware().isEmpty()) {
             sb.append("  user_data = <<-EOF\n");
             sb.append("              #!/bin/bash\n");
@@ -73,6 +73,16 @@ public class TerraformService {
 
     private String getSoftwareScript(String software) {
         switch (software.toLowerCase()) {
+            case "nodejs":
+                return "              curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -\n" +
+                       "              sudo apt-get install -y nodejs\n";
+            case "java":
+                return "              sudo apt-get install -y default-jdk\n";
+            case "python":
+                return "              sudo apt-get install -y python3 python3-pip python3-dev\n";
+            case "laravel":
+                return "              sudo apt-get install -y php-common php-cli php-gd php-mysql php-curl php-intl php-mbstring php-bcmath php-xml php-zip unzip\n" +
+                       "              curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer\n";
             case "redis":
                 return "              sudo apt-get install -y redis-server\n" +
                        "              sudo systemctl enable redis-server\n" +
@@ -99,7 +109,6 @@ public class TerraformService {
         sb.append("  name        = \"magic-sg-").append(safeName).append("\"\n");
         sb.append("  description = \"Allow traffic for ").append(config.getInstanceName()).append("\"\n\n");
 
-        // Sync ports with software
         List<Integer> ports = new ArrayList<>(config.getSecurityGroupPorts());
         if (config.getSelectedSoftware() != null) {
             if (config.getSelectedSoftware().contains("Redis") && !ports.contains(6379)) ports.add(6379);
@@ -167,6 +176,8 @@ public class TerraformService {
     }
 
     private void prepareWorkingDirectory(InfrastructureStackRequest stack) throws IOException, InterruptedException {
+        Files.createDirectories(Paths.get(VAULT_DIR));
+        
         if ("aws".equalsIgnoreCase(stack.getCloudProvider())) {
             for (CloudResourceRequest config : stack.getResources()) {
                 if ("EC2".equalsIgnoreCase(config.getServiceType()) && config.getKeyPairName() != null) {
@@ -184,18 +195,26 @@ public class TerraformService {
     private void ensureKeyPairExists(String keyName, InfrastructureStackRequest stack) {
         try {
             AmazonEC2 ec2 = getEc2Client(stack);
-            try {
-                ec2.describeKeyPairs(new DescribeKeyPairsRequest().withKeyNames(keyName));
-            } catch (AmazonEC2Exception e) {
-                if (e.getStatusCode() == 400 && e.getErrorCode().equals("InvalidKeyPair.NotFound")) {
-                    CreateKeyPairResult result = ec2.createKeyPair(new CreateKeyPairRequest().withKeyName(keyName));
-                    String pemContent = result.getKeyPair().getKeyMaterial();
-                    Path path = Paths.get(TERRAFORM_DIR);
-                    Files.write(path.resolve(keyName + ".pem"), pemContent.getBytes());
+            Path vaultPath = Paths.get(VAULT_DIR, keyName + ".pem");
+            
+            // If the key doesn't exist locally, we MUST try to create it on AWS
+            if (!Files.exists(vaultPath)) {
+                try {
+                    ec2.describeKeyPairs(new DescribeKeyPairsRequest().withKeyNames(keyName));
+                    // If we reach here, the key exists on AWS but we don't have the PEM file.
+                    // This is a warning state.
+                    System.err.println("Warning: Key " + keyName + " exists on AWS but PEM is missing in vault.");
+                } catch (AmazonEC2Exception e) {
+                    if (e.getStatusCode() == 400 && e.getErrorCode().equals("InvalidKeyPair.NotFound")) {
+                        CreateKeyPairResult result = ec2.createKeyPair(new CreateKeyPairRequest().withKeyName(keyName));
+                        String pemContent = result.getKeyPair().getKeyMaterial();
+                        Files.write(vaultPath, pemContent.getBytes());
+                        System.out.println("New Key Pair generated and vaulted: " + vaultPath);
+                    }
                 }
             }
         } catch (Exception e) {
-            System.err.println("Key Pair check failed: " + e.getMessage());
+            System.err.println("Key Vault check failed: " + e.getMessage());
         }
     }
 

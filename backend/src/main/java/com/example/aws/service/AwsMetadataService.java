@@ -25,10 +25,15 @@ public class AwsMetadataService {
     }
 
     public List<String> getRegions() {
-        AmazonEC2 ec2 = AmazonEC2ClientBuilder.standard().withRegion("us-east-1").build();
-        return ec2.describeRegions().getRegions().stream()
-                .map(Region::getRegionName)
-                .collect(Collectors.toList());
+        try {
+            AmazonEC2 ec2 = AmazonEC2ClientBuilder.standard().withRegion("us-east-1").build();
+            return ec2.describeRegions().getRegions().stream()
+                    .map(Region::getRegionName)
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            // Fallback for Zero-CLI environments where local credentials aren't set
+            return Arrays.asList("us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-south-1", "ap-southeast-1", "sa-east-1");
+        }
     }
 
     public List<Map<String, String>> getRunningInstances(String region, String accessKey, String secretKey) {
@@ -42,6 +47,7 @@ public class AwsMetadataService {
                 Map<String, String> map = new HashMap<>();
                 map.put("id", instance.getInstanceId());
                 map.put("ip", instance.getPublicIpAddress());
+                map.put("keyName", instance.getKeyName());
                 
                 String name = instance.getTags().stream()
                         .filter(t -> t.getKey().equals("Name"))
