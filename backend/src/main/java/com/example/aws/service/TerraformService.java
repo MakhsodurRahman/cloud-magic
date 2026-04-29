@@ -28,24 +28,47 @@ public class TerraformService {
 
     public String generateTerraformCode(InfrastructureStackRequest stack) {
         StringBuilder sb = new StringBuilder();
+        sb.append(generateProviderCode(stack));
+
+        if (stack.getResources() != null) {
+            for (CloudResourceRequest config : stack.getResources()) {
+                sb.append(generateSingleResourceCode(config, stack.getCloudProvider()));
+            }
+        }
+        return sb.toString();
+    }
+
+    private String generateProviderCode(InfrastructureStackRequest stack) {
+        StringBuilder sb = new StringBuilder();
         String provider = stack.getCloudProvider() != null ? stack.getCloudProvider().toLowerCase() : "aws";
-        
         if ("aws".equals(provider)) {
             sb.append("provider \"aws\" {\n");
             sb.append("  region = \"").append(stack.getRegion()).append("\"\n");
             sb.append("}\n\n");
         }
+        return sb.toString();
+    }
 
-        if (stack.getResources() != null) {
-            for (CloudResourceRequest config : stack.getResources()) {
-                if ("aws".equals(provider)) {
-                    if ("EC2".equalsIgnoreCase(config.getServiceType())) generateEc2Code(config, sb);
-                    else if ("S3".equalsIgnoreCase(config.getServiceType())) generateS3Code(config, sb);
-                    else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) generatePipelineCode(config, sb);
-                }
-            }
+    private String generateSingleResourceCode(CloudResourceRequest config, String cloudProvider) {
+        StringBuilder sb = new StringBuilder();
+        String provider = cloudProvider != null ? cloudProvider.toLowerCase() : "aws";
+        if ("aws".equals(provider)) {
+            if ("EC2".equalsIgnoreCase(config.getServiceType())) generateEc2Code(config, sb);
+            else if ("S3".equalsIgnoreCase(config.getServiceType())) generateS3Code(config, sb);
+            else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) generatePipelineCode(config, sb);
         }
         return sb.toString();
+    }
+
+    private String getModuleName(CloudResourceRequest config) {
+        String type = config.getServiceType().toLowerCase();
+        String name = "resource";
+        if ("EC2".equalsIgnoreCase(config.getServiceType())) name = config.getInstanceName();
+        else if ("S3".equalsIgnoreCase(config.getServiceType())) name = config.getBucketName();
+        else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) name = config.getPipelineName();
+        
+        String safeName = name.replaceAll("[^a-zA-Z0-9-]", "_").toLowerCase();
+        return type + "_" + safeName;
     }
 
     private void generatePipelineCode(CloudResourceRequest config, StringBuilder sb) {
@@ -278,17 +301,61 @@ public class TerraformService {
         Files.createDirectories(Paths.get(VAULT_DIR));
         
         if ("aws".equalsIgnoreCase(stack.getCloudProvider())) {
-            for (CloudResourceRequest config : stack.getResources()) {
-                if ("EC2".equalsIgnoreCase(config.getServiceType()) && config.getKeyPairName() != null) {
-                    ensureKeyPairExists(config.getKeyPairName(), stack);
+            if (stack.getResources() != null) {
+                for (CloudResourceRequest config : stack.getResources()) {
+                    if ("EC2".equalsIgnoreCase(config.getServiceType()) && config.getKeyPairName() != null) {
+                        ensureKeyPairExists(config.getKeyPairName(), stack);
+                    }
                 }
             }
         }
         
-        String code = generateTerraformCode(stack);
         Path path = Paths.get(TERRAFORM_DIR);
         if (!Files.exists(path)) Files.createDirectories(path);
-        Files.write(path.resolve("main.tf"), code.getBytes());
+
+        // Clean up old individual .tf files from the root directory to avoid conflicts with modules
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(path, "*.tf")) {
+            for (Path entry : stream) {
+                if (!entry.getFileName().toString().equals("main.tf")) {
+                    Files.delete(entry);
+                }
+            }
+        } catch (DirectoryIteratorException ex) {
+            System.err.println("Error cleaning up old .tf files: " + ex.getMessage());
+        }
+
+        Path mainTfPath = path.resolve("main.tf");
+        String mainTfContent = "";
+        if (Files.exists(mainTfPath)) {
+            mainTfContent = new String(Files.readAllBytes(mainTfPath));
+        }
+
+        // 1. Ensure provider is in main.tf
+        String providerCode = generateProviderCode(stack);
+        if (!mainTfContent.contains("provider \"aws\"")) {
+            Files.write(mainTfPath, providerCode.getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            mainTfContent += providerCode;
+        }
+
+        // 2. Write modules and append to main.tf
+        if (stack.getResources() != null) {
+            for (CloudResourceRequest config : stack.getResources()) {
+                String moduleName = getModuleName(config);
+                Path moduleDir = path.resolve("modules").resolve(moduleName);
+                Files.createDirectories(moduleDir);
+
+                // Write the actual resource code to the module's main.tf
+                String resourceCode = generateSingleResourceCode(config, stack.getCloudProvider());
+                Files.write(moduleDir.resolve("main.tf"), resourceCode.getBytes());
+
+                // Append module call to top-level main.tf if not present
+                String moduleCall = "module \"" + moduleName + "\" {\n  source = \"./modules/" + moduleName + "\"\n}\n\n";
+                if (!mainTfContent.contains("module \"" + moduleName + "\"")) {
+                    Files.write(mainTfPath, moduleCall.getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+                    mainTfContent += moduleCall;
+                }
+            }
+        }
     }
 
     private void ensureKeyPairExists(String keyName, InfrastructureStackRequest stack) {
