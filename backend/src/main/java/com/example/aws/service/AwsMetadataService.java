@@ -28,21 +28,11 @@ public class AwsMetadataService {
     }
 
     public List<String> getInstanceTypes(String region) {
-        List<String> types = runAwsCommand(new String[]{
+        return runAwsCommand(new String[]{
             "aws", "ec2", "describe-instance-types", "--region", region,
-            "--filters", "Name=instance-type,Values=t3.*,t2.*,c7i-flex.*",
-            "--query", "InstanceTypes[:10].InstanceType", "--output", "json"
+            "--filters", "Name=instance-type,Values=t3.micro,t2.micro,t3.small,c7i-flex.large,m7i-flex.large",
+            "--query", "InstanceTypes[].InstanceType", "--output", "json"
         });
-        
-        List<String> labeledTypes = new ArrayList<>();
-        for (String type : types) {
-            if (type.equals("t2.micro") || type.equals("t3.micro")) {
-                labeledTypes.add(type + " (Free Tier)");
-            } else {
-                labeledTypes.add(type);
-            }
-        }
-        return labeledTypes;
     }
 
     public List<String> getKeyPairs(String region) {

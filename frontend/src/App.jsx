@@ -9,7 +9,7 @@ const App = () => {
   // Dynamic Metadata States
   const [availableRegions, setAvailableRegions] = useState(['us-east-1', 'us-west-2', 'eu-west-1']);
   const [availableAmis, setAvailableAmis] = useState([]);
-  const [availableInstanceTypes, setAvailableInstanceTypes] = useState(['t3.micro', 't3.small']);
+  const [availableInstanceTypes, setAvailableInstanceTypes] = useState(['t3.micro', 't2.micro', 't3.small', 'c7i-flex.large', 'm7i-flex.large']);
   const [availableKeyPairs, setAvailableKeyPairs] = useState([]);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
 
@@ -278,7 +278,11 @@ const App = () => {
                 <div className="field-group">
                   <label>Instance Type</label>
                   <select name="instanceType" value={formData.instanceType} onChange={handleChange}>
-                    {availableInstanceTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                    {availableInstanceTypes.map(type => (
+                      <option key={type} value={type}>
+                        {type} (Free Tier Eligible)
+                      </option>
+                    ))}
                   </select>
                 </div>
 
