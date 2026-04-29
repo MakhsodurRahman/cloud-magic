@@ -1,111 +1,129 @@
 package com.example.aws.service;
 
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
+import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.services.ec2.AmazonEC2;
+import com.amazonaws.services.ec2.AmazonEC2ClientBuilder;
+import com.amazonaws.services.ec2.model.*;
+import com.amazonaws.services.securitytoken.AWSSecurityTokenService;
+import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
+import com.amazonaws.services.securitytoken.model.GetCallerIdentityRequest;
 import org.springframework.stereotype.Service;
-import java.io.*;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
 public class AwsMetadataService {
 
-    public List<String> getRegions(String accessKey, String secretKey) {
-        return runAwsCommand(new String[]{"aws", "ec2", "describe-regions", "--query", "Regions[].RegionName", "--output", "json"}, accessKey, secretKey);
+    private AmazonEC2 getEc2Client(String accessKey, String secretKey, String region) {
+        BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+        return AmazonEC2ClientBuilder.standard()
+                .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                .withRegion(region != null ? region : "us-east-1")
+                .build();
     }
 
-    public List<Map<String, String>> getLatestAmis(String region, String accessKey, String secretKey) {
-        String[] command = {
-            "aws", "ec2", "describe-images", "--region", region, "--owners", "amazon", "099720109477",
-            "--filters", "Name=name,Values=*al2023-ami-2023*,*ubuntu-noble-24.04*,*ubuntu-jammy-22.04*,*ubuntu-focal-20.04*", "Name=state,Values=available", "Name=architecture,Values=x86_64",
-            "--query", "Images[:15].[ImageId,Name]", "--output", "json"
-        };
-        
-        List<Map<String, String>> images = parseImageResults(runAwsRaw(command, accessKey, secretKey, region));
-        for (Map<String, String> img : images) {
-            img.put("name", img.get("name") + " (Free Tier Eligible)");
+    public List<String> getRegions() {
+        AmazonEC2 ec2 = AmazonEC2ClientBuilder.standard().withRegion("us-east-1").build();
+        return ec2.describeRegions().getRegions().stream()
+                .map(Region::getRegionName)
+                .collect(Collectors.toList());
+    }
+
+    public List<Map<String, String>> getRunningInstances(String region, String accessKey, String secretKey) {
+        AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+        DescribeInstancesRequest request = new DescribeInstancesRequest()
+                .withFilters(new Filter("instance-state-name").withValues("running"));
+
+        List<Map<String, String>> instances = new ArrayList<>();
+        for (Reservation reservation : ec2.describeInstances(request).getReservations()) {
+            for (Instance instance : reservation.getInstances()) {
+                Map<String, String> map = new HashMap<>();
+                map.put("id", instance.getInstanceId());
+                map.put("ip", instance.getPublicIpAddress());
+                
+                String name = instance.getTags().stream()
+                        .filter(t -> t.getKey().equals("Name"))
+                        .map(Tag::getValue)
+                        .findFirst().orElse("Unnamed Instance");
+                map.put("name", name);
+                instances.add(map);
+            }
         }
-        return images;
+        return instances;
+    }
+
+    public List<Map<String, String>> getAmis(String region, String accessKey, String secretKey) {
+        AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+        DescribeImagesRequest request = new DescribeImagesRequest()
+                .withOwners("amazon", "099720109477")
+                .withFilters(
+                    new Filter("name").withValues("*al2023-ami-2023*", "*ubuntu-noble-24.04*", "*ubuntu-jammy-22.04*"),
+                    new Filter("state").withValues("available"),
+                    new Filter("architecture").withValues("x86_64")
+                );
+
+        return ec2.describeImages(request).getImages().stream()
+                .limit(15)
+                .map(img -> {
+                    Map<String, String> map = new HashMap<>();
+                    map.put("id", img.getImageId());
+                    map.put("name", img.getName() + " (Free Tier Eligible)");
+                    return map;
+                })
+                .collect(Collectors.toList());
     }
 
     public List<String> getInstanceTypes(String region, String accessKey, String secretKey) {
-        return runAwsCommand(new String[]{
-            "aws", "ec2", "describe-instance-types", "--region", region,
-            "--filters", "Name=instance-type,Values=t3.micro,t2.micro,t3.small,c7i-flex.large,m7i-flex.large",
-            "--query", "InstanceTypes[].InstanceType", "--output", "json"
-        }, accessKey, secretKey, region);
+        AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+        DescribeInstanceTypesRequest request = new DescribeInstanceTypesRequest()
+                .withFilters(new Filter("instance-type").withValues("t3.micro", "t2.micro", "t3.small", "c7i-flex.large"));
+
+        return ec2.describeInstanceTypes(request).getInstanceTypes().stream()
+                .map(InstanceTypeInfo::getInstanceType)
+                .collect(Collectors.toList());
     }
 
     public List<String> getKeyPairs(String region, String accessKey, String secretKey) {
-        return runAwsCommand(new String[]{
-            "aws", "ec2", "describe-key-pairs", "--region", region,
-            "--query", "KeyPairs[].KeyName", "--output", "json"
-        }, accessKey, secretKey, region);
+        AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+        return ec2.describeKeyPairs().getKeyPairs().stream()
+                .map(KeyPairInfo::getKeyName)
+                .collect(Collectors.toList());
     }
 
-    private List<String> runAwsCommand(String[] command, String accessKey, String secretKey) {
-        return runAwsCommand(command, accessKey, secretKey, null);
+    public void validateCredentials(String accessKey, String secretKey, String region) throws Exception {
+        BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+        AWSSecurityTokenService sts = AWSSecurityTokenServiceClientBuilder.standard()
+                .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                .withRegion(region)
+                .build();
+
+        sts.getCallerIdentity(new GetCallerIdentityRequest());
     }
 
-    private List<String> runAwsCommand(String[] command, String accessKey, String secretKey, String region) {
+    public String authorizeSshAccess(String instanceId, String region, String accessKey, String secretKey) {
         try {
-            ProcessBuilder pb = new ProcessBuilder(command);
-            injectCredentials(pb, accessKey, secretKey, region);
-            Process process = pb.start();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String output = reader.lines().collect(Collectors.joining());
-                if (output.trim().isEmpty()) return Collections.emptyList();
-                return Arrays.asList(output.replace("[", "").replace("]", "").replace("\"", "").split(",\\s*"));
-            }
+            AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+            DescribeInstancesRequest describeRequest = new DescribeInstancesRequest().withInstanceIds(instanceId);
+            Instance instance = ec2.describeInstances(describeRequest).getReservations().get(0).getInstances().get(0);
+            String sgId = instance.getSecurityGroups().get(0).getGroupId();
+            
+            IpPermission ipPermission = new IpPermission()
+                    .withIpProtocol("tcp")
+                    .withFromPort(22)
+                    .withToPort(22)
+                    .withIpv4Ranges(new IpRange().withCidrIp("0.0.0.0/0"));
+
+            ec2.authorizeSecurityGroupIngress(new AuthorizeSecurityGroupIngressRequest()
+                    .withGroupId(sgId)
+                    .withIpPermissions(ipPermission));
+            return "Successfully opened Port 22 in Security Group: " + sgId;
+        } catch (AmazonEC2Exception e) {
+            if (e.getErrorCode().equals("InvalidPermission.Duplicate")) return "Port 22 already open.";
+            return "AWS Error: " + e.getErrorMessage();
         } catch (Exception e) {
-            return Collections.singletonList("Error: " + e.getMessage());
+            return "Error: " + e.getMessage();
         }
-    }
-
-    private String runAwsRaw(String[] command, String accessKey, String secretKey, String region) {
-        try {
-            ProcessBuilder pb = new ProcessBuilder(command);
-            injectCredentials(pb, accessKey, secretKey, region);
-            Process process = pb.start();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                return reader.lines().collect(Collectors.joining());
-            }
-        } catch (Exception e) {
-            System.err.println("AWS CLI Error: " + e.getMessage());
-            return "[]";
-        }
-    }
-
-    private void injectCredentials(ProcessBuilder pb, String accessKey, String secretKey, String region) {
-        if (accessKey != null && !accessKey.isEmpty()) {
-            pb.environment().put("AWS_ACCESS_KEY_ID", accessKey);
-        }
-        if (secretKey != null && !secretKey.isEmpty()) {
-            pb.environment().put("AWS_SECRET_ACCESS_KEY", secretKey);
-        }
-        if (region != null && !region.isEmpty()) {
-            pb.environment().put("AWS_DEFAULT_REGION", region);
-        }
-    }
-
-    private List<Map<String, String>> parseImageResults(String raw) {
-        List<Map<String, String>> result = new ArrayList<>();
-        if (raw == null || raw.trim().isEmpty() || raw.equals("[]")) return result;
-
-        String content = raw.trim();
-        if (content.startsWith("[[") && content.endsWith("]]")) {
-             content = content.substring(1, content.length() - 1).trim();
-        }
-
-        String[] entries = content.split("\\],\\s*\\[");
-        for (String entry : entries) {
-            String cleanEntry = entry.replace("[", "").replace("]", "").replace("\"", "");
-            String[] parts = cleanEntry.split(",");
-            if (parts.length >= 1) {
-                Map<String, String> map = new HashMap<>();
-                map.put("id", parts[0].trim());
-                map.put("name", parts.length >= 2 ? parts[1].trim() : "Unnamed Image");
-                result.add(map);
-            }
-        }
-        return result;
     }
 }

@@ -19,8 +19,12 @@ public class CloudResourceRequest {
     private String bucketName;
     private boolean versioningEnabled;
     private String acl; // e.g., "private", "public-read"
+    private boolean installRedis;
 
     // Getters and Setters
+    public boolean isInstallRedis() { return installRedis; }
+    public void setInstallRedis(boolean installRedis) { this.installRedis = installRedis; }
+
     public String getServiceType() { return serviceType; }
     public void setServiceType(String serviceType) { this.serviceType = serviceType; }
 

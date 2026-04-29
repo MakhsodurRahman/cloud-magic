@@ -1,5 +1,10 @@
 package com.example.aws.service;
 
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
+import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.services.ec2.AmazonEC2;
+import com.amazonaws.services.ec2.AmazonEC2ClientBuilder;
+import com.amazonaws.services.ec2.model.*;
 import com.example.aws.model.CloudResourceRequest;
 import com.example.aws.model.InfrastructureStackRequest;
 import org.springframework.stereotype.Service;
@@ -12,6 +17,14 @@ import java.util.stream.Collectors;
 public class TerraformService {
 
     private static final String TERRAFORM_DIR = "terraform-workdir";
+
+    private AmazonEC2 getEc2Client(InfrastructureStackRequest stack) {
+        BasicAWSCredentials credentials = new BasicAWSCredentials(stack.getAccessKey(), stack.getSecretKey());
+        return AmazonEC2ClientBuilder.standard()
+                .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                .withRegion(stack.getRegion())
+                .build();
+    }
 
     public String generateTerraformCode(InfrastructureStackRequest stack) {
         StringBuilder sb = new StringBuilder();
@@ -61,7 +74,7 @@ public class TerraformService {
         sb.append("resource \"aws_s3_bucket_ownership_controls\" \"").append(bucketId).append("_ownership\" {\n");
         sb.append("  bucket = aws_s3_bucket.").append(bucketId).append(".id\n");
         sb.append("  rule {\n    object_ownership = \"BucketOwnerPreferred\"\n  }\n}\n\n");
-
+ 
         sb.append("resource \"aws_s3_bucket_acl\" \"").append(bucketId).append("_acl\" {\n");
         sb.append("  depends_on = [aws_s3_bucket_ownership_controls.").append(bucketId).append("_ownership]\n");
         sb.append("  bucket = aws_s3_bucket.").append(bucketId).append(".id\n");
@@ -94,11 +107,10 @@ public class TerraformService {
     }
 
     private void prepareWorkingDirectory(InfrastructureStackRequest stack) throws IOException, InterruptedException {
-        // Restore Business Logic: Ensure key pairs exist for AWS EC2
         if ("aws".equalsIgnoreCase(stack.getCloudProvider())) {
             for (CloudResourceRequest config : stack.getResources()) {
                 if ("EC2".equalsIgnoreCase(config.getServiceType()) && config.getKeyPairName() != null) {
-                    ensureKeyPairExists(config.getKeyPairName(), stack.getRegion(), stack);
+                    ensureKeyPairExists(config.getKeyPairName(), stack);
                 }
             }
         }
@@ -109,33 +121,21 @@ public class TerraformService {
         Files.write(path.resolve("main.tf"), code.getBytes());
     }
 
-    private void ensureKeyPairExists(String keyName, String region, InfrastructureStackRequest stack) {
+    private void ensureKeyPairExists(String keyName, InfrastructureStackRequest stack) {
         try {
-            // Check if key exists or recreate if needed
-            String[] checkCmd = {"aws", "ec2", "describe-key-pairs", "--key-names", keyName, "--region", region};
-            String checkResult = runProcessRaw(checkCmd, stack);
-            
-            if (checkResult == null || !checkResult.contains(keyName)) {
-                String[] createCmd = {"aws", "ec2", "create-key-pair", "--key-name", keyName, "--region", region, "--query", "KeyMaterial", "--output", "text"};
-                String pemContent = runProcessRaw(createCmd, stack);
-                if (pemContent != null && pemContent.length() > 10) {
+            AmazonEC2 ec2 = getEc2Client(stack);
+            try {
+                ec2.describeKeyPairs(new DescribeKeyPairsRequest().withKeyNames(keyName));
+            } catch (AmazonEC2Exception e) {
+                if (e.getStatusCode() == 400 && e.getErrorCode().equals("InvalidKeyPair.NotFound")) {
+                    CreateKeyPairResult result = ec2.createKeyPair(new CreateKeyPairRequest().withKeyName(keyName));
+                    String pemContent = result.getKeyPair().getKeyMaterial();
                     Path path = Paths.get(TERRAFORM_DIR);
-                    Files.write(path.resolve(keyName + ".pem"), pemContent.trim().getBytes());
+                    Files.write(path.resolve(keyName + ".pem"), pemContent.getBytes());
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error ensuring key pair: " + e.getMessage());
-        }
-    }
-
-    private String runProcessRaw(String[] command, InfrastructureStackRequest stack) throws IOException, InterruptedException {
-        ProcessBuilder pb = new ProcessBuilder(command);
-        injectCredentials(pb, stack);
-        Process process = pb.start();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-            return reader.lines().collect(Collectors.joining("\n"));
-        } finally {
-            process.waitFor();
+            System.err.println("Error ensuring key pair via SDK: " + e.getMessage());
         }
     }
 

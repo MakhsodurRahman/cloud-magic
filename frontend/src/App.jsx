@@ -28,7 +28,8 @@ const App = () => {
     ebsVolumeSize: 20,
     bucketName: 'my-magic-bucket-' + Math.floor(Math.random() * 10000),
     versioningEnabled: false,
-    acl: 'private'
+    acl: 'private',
+    installRedis: false
   });
 
   const [terraformCode, setTerraformCode] = useState('');
@@ -36,21 +37,140 @@ const App = () => {
   const [output, setOutput] = useState('');
   const [backendError, setBackendError] = useState(null);
   const [isLogMaximized, setIsLogMaximized] = useState(false);
+  
+  // Software Management States
+  const [runningInstances, setRunningInstances] = useState([]);
+  const [selectedInstanceId, setSelectedInstanceId] = useState('');
+  const [installing, setInstalling] = useState(false);
+  const [softwarePassword, setSoftwarePassword] = useState('');
+  const [sshUser, setSshUser] = useState('ubuntu');
+  const [showFixSsh, setShowFixSsh] = useState(false);
+
+  const handleFixSsh = async () => {
+    const instance = runningInstances.find(i => i.id === selectedInstanceId);
+    if (!instance) return;
+
+    setInstalling(true);
+    setOutput(prev => prev + `\nAttempting to auto-fix Security Group for ${instance.id}...\n`);
+    
+    try {
+      const response = await fetch(`http://localhost:8080/api/aws/fix-ssh?instanceId=${instance.id}&region=${region}`, {
+        method: 'POST',
+        headers: {
+          'X-AWS-Access-Key': credentials.accessKey,
+          'X-AWS-Secret-Key': credentials.secretKey
+        }
+      });
+      const result = await response.text();
+      setOutput(prev => prev + result + '\n');
+      
+      // Wait a few seconds for AWS to propagate the SG change
+      setOutput(prev => prev + 'Waiting for AWS propagation (5s)...\n');
+      setTimeout(() => {
+        handleInstallRedis();
+        setShowFixSsh(false);
+      }, 5000);
+    } catch (err) {
+      setOutput(prev => prev + `\nFix failed: ${err.message}`);
+      setInstalling(false);
+    }
+  };
+
+  const fetchInstances = async () => {
+    try {
+      const response = await fetch(`http://localhost:8080/api/aws/instances?region=${region}`, {
+        headers: {
+          'X-AWS-Access-Key': credentials.accessKey,
+          'X-AWS-Secret-Key': credentials.secretKey
+        }
+      });
+      const data = await response.json();
+      setRunningInstances(data);
+      if (data.length > 0) setSelectedInstanceId(data[0].id);
+    } catch (err) {
+      console.warn('Could not fetch running instances');
+    }
+  };
+
+  const handleInstallRedis = async () => {
+    const instance = runningInstances.find(i => i.id === selectedInstanceId);
+    if (!instance) return;
+
+    setInstalling(true);
+    setOutput(`Starting Redis installation on ${instance.name} (${instance.ip})...\n`);
+    
+    try {
+      const response = await fetch('http://localhost:8080/api/software/install-redis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: instance.ip,
+          user: sshUser,
+          password: softwarePassword,
+          keyName: resourceStack.find(r => r.instanceName === instance.name)?.keyPairName
+        })
+      });
+      const result = await response.text();
+      setOutput(prev => prev + result);
+      if (result.toLowerCase().includes('timeout')) setShowFixSsh(true);
+    } catch (err) {
+      setOutput(prev => prev + `\nInstallation failed: ${err.message}`);
+      if (err.message.toLowerCase().includes('timeout')) setShowFixSsh(true);
+    } finally {
+      setInstalling(false);
+    }
+  };
 
   useEffect(() => {
     document.body.className = isDarkMode ? 'dark' : 'light';
   }, [isDarkMode]);
 
-  const handleConnect = () => {
-    if (credentials.accessKey && credentials.secretKey) {
-      setIsConnected(true);
-      fetchMetadata(`/regions`, setAvailableRegions);
-    } else {
-      alert('Please enter your IAM credentials to connect.');
+  const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState(null);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+
+  const handleConnect = async () => {
+    if (!credentials.accessKey || !credentials.secretKey) {
+      setConnectionError('Please enter both Access Key and Secret Key.');
+      return;
+    }
+
+    setConnecting(true);
+    setConnectionError(null);
+    try {
+      const response = await fetch(`http://localhost:8080/api/aws/validate?region=${region}`, {
+        headers: {
+          'X-AWS-Access-Key': credentials.accessKey,
+          'X-AWS-Secret-Key': credentials.secretKey
+        }
+      });
+
+      if (response.ok) {
+        setShowSuccessModal(true);
+        fetchMetadata(`/regions`, setAvailableRegions);
+        setTimeout(() => {
+          setIsConnected(true);
+          setShowSuccessModal(false);
+        }, 2500);
+      } else {
+        const errorMsg = await response.text();
+        setConnectionError(errorMsg.includes('InvalidClientTokenId') ? 'Invalid Access Key ID. Please check your credentials.' : 
+                         errorMsg.includes('SignatureDoesNotMatch') ? 'Invalid Secret Access Key. Please check your credentials.' : 
+                         `Connection Failed: ${errorMsg}`);
+      }
+    } catch (err) {
+      setConnectionError('Could not reach the server. Please check your backend connection.');
+    } finally {
+      setConnecting(false);
     }
   };
 
-  // Fetch Metadata on Load & Region Change
+  useEffect(() => {
+    if (activeService === 'Software' && isConnected) {
+      fetchInstances();
+    }
+  }, [activeService, isConnected]);
+
   useEffect(() => {
     if (isConnected && cloudProvider === 'AWS' && region) {
       fetchMetadata(`/amis?region=${region}`, setAvailableAmis);
@@ -98,6 +218,7 @@ const App = () => {
       ...formData, 
       securityGroupPorts: ports,
       ebsVolumeSize: parseInt(formData.ebsVolumeSize) || 20,
+      installRedis: activeService === 'EC2' ? formData.installRedis : false,
       serviceType: activeService, 
       id: Date.now() 
     };
@@ -146,6 +267,51 @@ const App = () => {
         if (!response.ok) throw new Error(`${step.label} failed: ${result}`);
       }
       setDeploymentStatus({ step: 'Success', status: 'success', message: 'Infrastructure deployed successfully!' });
+      
+      // Phase 5: Unified Software Orchestration
+      const softwareTasks = resourceStack.filter(r => r.installRedis);
+      if (softwareTasks.length > 0) {
+        setDeploymentStatus({ step: 'Software', status: 'loading', message: 'Orchestrating Magic Add-ons...' });
+        setOutput(prev => prev + '\n--- Stage: Unified Software Orchestration ---\n');
+        
+        // Wait for instances to boot and refresh the instance list
+        setOutput(prev => prev + 'Waiting for cloud instances to initialize (15s)...\n');
+        await new Promise(r => setTimeout(r, 15000));
+        
+        // Fetch fresh instances to get IPs
+        const response = await fetch(`http://localhost:8080/api/aws/instances?region=${region}`, {
+          headers: { 'X-AWS-Access-Key': credentials.accessKey, 'X-AWS-Secret-Key': credentials.secretKey }
+        });
+        const liveInstances = await response.json();
+
+        for (const task of softwareTasks) {
+          const liveInst = liveInstances.find(i => i.name === task.instanceName);
+          if (liveInst) {
+            setOutput(prev => prev + `Installing Redis on ${task.instanceName} (${liveInst.ip})...\n`);
+            
+            // 1. Auto-Fix Connection
+            await fetch(`http://localhost:8080/api/aws/fix-ssh?instanceId=${liveInst.id}&region=${region}`, {
+              method: 'POST',
+              headers: { 'X-AWS-Access-Key': credentials.accessKey, 'X-AWS-Secret-Key': credentials.secretKey }
+            });
+
+            // 2. Install Redis
+            const installRes = await fetch('http://localhost:8080/api/software/install-redis', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                host: liveInst.ip,
+                user: 'ubuntu',
+                keyName: task.keyPairName
+              })
+            });
+            const log = await installRes.text();
+            setOutput(prev => prev + log + '\n');
+          }
+        }
+        setDeploymentStatus({ step: 'Complete', status: 'success', message: 'Infrastructure & Software are Ready!' });
+      }
+
     } catch (err) {
       setDeploymentStatus({ step: 'Failed', status: 'error', message: err.message });
       setOutput(prev => prev + '\nDeployment aborted.');
@@ -204,6 +370,21 @@ const App = () => {
         </div>
       )}
 
+      {showSuccessModal && (
+        <div className="animate-fade" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0, 0, 0, 0.7)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(30px)' }}>
+          <div style={{ background: 'var(--panel-bg)', padding: '4rem', borderRadius: '32px', border: '1px solid var(--success)', textAlign: 'center', maxWidth: '450px', width: '90%', boxShadow: '0 0 50px rgba(52, 199, 89, 0.2)' }}>
+            <div className="animate-bounce" style={{ width: '80px', height: '80px', background: 'rgba(52, 199, 89, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px auto' }}>
+              <CheckCircle2 size={48} color="var(--success)" />
+            </div>
+            <h2 style={{ fontSize: '2.2rem', fontWeight: 800, marginBottom: '12px' }}>Session Connected</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem' }}>Successfully authenticated with <strong>{cloudProvider}</strong> in <strong>{region}</strong>.</p>
+            <div style={{ marginTop: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', color: 'var(--success)', fontWeight: 600 }}>
+              <Loader2 size={16} className="animate-spin" /> Preparing Designer...
+            </div>
+          </div>
+        </div>
+      )}
+
       <aside className="sidebar" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div className="logo"><Box size={28} /> <span>CloudMagic</span></div>
@@ -216,10 +397,13 @@ const App = () => {
           <div className="animate-fade" style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
             <nav className="service-nav">
               <div className={`nav-item ${activeService === 'EC2' ? 'active' : ''}`} onClick={() => setActiveService('EC2')}>
-                <Server size={18} /> <span>{cloudProvider === 'AWS' ? 'EC2' : 'VM'}</span>
+                <Server size={18} /> <span>EC2</span>
               </div>
               <div className={`nav-item ${activeService === 'S3' ? 'active' : ''}`} onClick={() => setActiveService('S3')}>
-                <Database size={18} /> <span>{cloudProvider === 'AWS' ? 'S3' : 'Storage'}</span>
+                <Database size={18} /> <span>S3</span>
+              </div>
+              <div className={`nav-item ${activeService === 'Software' ? 'active' : ''}`} onClick={() => setActiveService('Software')}>
+                <Cpu size={18} /> <span>Software</span>
               </div>
             </nav>
 
@@ -320,6 +504,13 @@ const App = () => {
               <p style={{ color: 'var(--text-secondary)', marginBottom: '32px', fontSize: '1rem' }}>
                 Secure session-based authentication. No local configuration required.
               </p>
+
+              {connectionError && (
+                <div className="animate-fade" style={{ background: 'rgba(255, 59, 48, 0.1)', border: '1px solid var(--error)', padding: '16px', borderRadius: '12px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--error)', textAlign: 'left', fontSize: '0.9rem' }}>
+                  <AlertTriangle size={20} />
+                  <span>{connectionError}</span>
+                </div>
+              )}
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', textAlign: 'left' }}>
                 <div className="field-group" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
@@ -359,8 +550,10 @@ const App = () => {
                   className="btn btn-primary" 
                   style={{ marginTop: '12px', height: '56px', width: '100%' }} 
                   onClick={handleConnect}
+                  disabled={connecting}
                 >
-                  <Globe size={18} /> Connect Securely
+                  {connecting ? <Loader2 className="animate-spin" size={18} /> : <Globe size={18} />}
+                  {connecting ? 'Verifying...' : 'Connect Securely'}
                 </button>
               </div>
             </section>
@@ -380,79 +573,170 @@ const App = () => {
                <button onClick={() => setIsConnected(false)} style={{ background: 'none', border: 'none', color: 'var(--accent-color)', fontWeight: 600, cursor: 'pointer' }}>Switch Keys</button>
             </div>
 
-            <div className="config-panel">
-              <h2 style={{ marginBottom: '24px' }}>Configure {activeService}</h2>
-              <div className="form-grid">
-                {activeService === 'EC2' ? (
-                  <>
-                    <div className="field-group">
-                      <label>Instance Name</label>
-                      <input name="instanceName" value={formData.instanceName} onChange={handleChange} placeholder="e.g. prod-web-01" />
-                    </div>
-                    <div className="field-group">
-                      <label>Machine Image (AMI)</label>
-                      <select name="amiId" value={availableAmis.find(a => a.id === formData.amiId) ? formData.amiId : 'custom'} onChange={handleChange}>
-                        {availableAmis.map(ami => <option key={ami.id} value={ami.id}>{ami.name}</option>)}
-                        <option value="custom">-- Custom AMI ID --</option>
-                      </select>
-                    </div>
-                    <div className="field-group">
-                      <label>Instance Type</label>
-                      <select name="instanceType" value={formData.instanceType} onChange={handleChange}>
-                        {availableInstanceTypes.map(type => <option key={type} value={type}>{type} (Free Tier Eligible)</option>)}
-                      </select>
-                    </div>
-                    <div className="field-group">
-                      <label>Security Group Ports</label>
-                      <input name="securityGroupPorts" value={formData.securityGroupPorts} onChange={handleChange} placeholder="e.g. 22, 80, 443" />
-                    </div>
-                    <div className="field-group">
-                      <label>EBS Volume Size (GB)</label>
-                      <input type="number" name="ebsVolumeSize" value={formData.ebsVolumeSize} onChange={handleChange} />
-                    </div>
-                    <div className="field-group">
-                      <label>Key Pair</label>
-                      <select name="keyPairSelection" value={formData.keyPairSelection} onChange={handleChange}>
-                        <option value="existing">Use Existing Key</option>
-                        <option value="magic-new-key">Generate New Key</option>
-                      </select>
-                    </div>
-                    <div className="field-group">
-                      <label>{formData.keyPairSelection === 'magic-new-key' ? 'New Key Name' : 'Select Key'}</label>
-                      {formData.keyPairSelection === 'magic-new-key' ? (
-                        <input name="keyPairName" value={formData.keyPairName} onChange={handleChange} />
-                      ) : (
-                        <select name="keyPairName" value={formData.keyPairName} onChange={handleChange}>
-                          {availableKeyPairs.map(k => <option key={k} value={k}>{k}</option>)}
-                        </select>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="field-group">
-                      <label>Bucket Name</label>
-                      <input name="bucketName" value={formData.bucketName} onChange={handleChange} />
-                    </div>
-                    <div className="field-group">
-                      <label>ACL / Privacy</label>
-                      <select name="acl" value={formData.acl} onChange={handleChange}>
-                        <option value="private">Private (Encrypted)</option>
-                        <option value="public-read">Public Read</option>
-                      </select>
-                    </div>
-                  </>
-                )}
-              </div>
-              <button className="btn btn-primary" style={{ marginTop: '24px' }} onClick={addToStack}><Plus size={18} /> Add to Stack</button>
-            </div>
+            {activeService === 'Software' ? (
+              <div className="config-panel animate-fade">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+                  <Cpu size={24} color="var(--accent-color)" />
+                  <h2 style={{ margin: 0 }}>Software Manager</h2>
+                </div>
+                
+                <div className="form-grid">
+                  <div className="field-group">
+                    <label>Target Instance</label>
+                    <select 
+                      value={selectedInstanceId} 
+                      onChange={(e) => setSelectedInstanceId(e.target.value)}
+                    >
+                      {runningInstances.length === 0 ? <option>No running instances found</option> : 
+                        runningInstances.map(inst => (
+                          <option key={inst.id} value={inst.id}>{inst.name} ({inst.ip})</option>
+                        ))
+                      }
+                    </select>
+                  </div>
 
-            <div style={{ marginTop: '40px' }}>
-              <button className="btn btn-deploy" onClick={handleStepByStepDeploy} disabled={deploying || resourceStack.length === 0} style={{ width: '100%' }}>
-                {deploying ? <Loader2 className="animate-spin" size={20} /> : <Play size={18} />}
-                <span>{deploying ? 'Deploying...' : `Deploy Infrastructure to ${cloudProvider}`}</span>
-              </button>
-            </div>
+                  <div className="field-group">
+                    <label>SSH User</label>
+                    <input value={sshUser} onChange={(e) => setSshUser(e.target.value)} placeholder="e.g. ubuntu" />
+                  </div>
+
+                  <div className="field-group">
+                    <label>SSH Password (Optional)</label>
+                    <input type="password" value={softwarePassword} onChange={(e) => setSoftwarePassword(e.target.value)} placeholder="Leave blank if using Key (.pem)" />
+                  </div>
+                </div>
+
+                <div style={{ marginTop: '32px', display: 'flex', gap: '16px' }}>
+                  <button 
+                    className="btn btn-primary" 
+                    onClick={handleInstallRedis} 
+                    disabled={installing || runningInstances.length === 0}
+                  >
+                    {installing ? <Loader2 className="animate-spin" size={18} /> : <Database size={18} />}
+                    {installing ? 'Installing Redis...' : 'Install Redis'}
+                  </button>
+                  <button className="btn" onClick={fetchInstances} style={{ border: '1px solid var(--panel-border)' }}>
+                    <RefreshCw size={18} /> Refresh List
+                  </button>
+                </div>
+
+                {showFixSsh && (
+                  <div className="animate-fade" style={{ marginTop: '24px', padding: '20px', background: 'rgba(255, 153, 0, 0.1)', border: '1px solid #FF9900', borderRadius: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#FF9900', fontWeight: 700, marginBottom: '12px' }}>
+                      <AlertTriangle size={24} />
+                      <span>Connection Blocked by Security Group</span>
+                    </div>
+                    <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                      AWS is blocking our connection because Port 22 (SSH) is closed. Would you like CloudMagic to automatically open it for you?
+                    </p>
+                    <button 
+                      className="btn btn-primary" 
+                      style={{ background: '#FF9900', border: 'none', width: '100%' }}
+                      onClick={handleFixSsh}
+                      disabled={installing}
+                    >
+                      <Shield size={18} /> Fix Connection & Retry Installation
+                    </button>
+                  </div>
+                )}
+
+                <p style={{ marginTop: '20px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Note: If using a machine created by this tool, the system will automatically use the <strong>.pem</strong> key from your session.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="config-panel">
+                  <h2 style={{ marginBottom: '24px' }}>Configure {activeService}</h2>
+                  <div className="form-grid">
+                    {activeService === 'EC2' ? (
+                      <>
+                        <div className="field-group">
+                          <label>Instance Name</label>
+                          <input name="instanceName" value={formData.instanceName} onChange={handleChange} placeholder="e.g. prod-web-01" />
+                        </div>
+                        <div className="field-group">
+                          <label>Machine Image (AMI)</label>
+                          <select name="amiId" value={availableAmis.find(a => a.id === formData.amiId) ? formData.amiId : 'custom'} onChange={handleChange}>
+                            {availableAmis.map(ami => <option key={ami.id} value={ami.id}>{ami.name}</option>)}
+                            <option value="custom">-- Custom AMI ID --</option>
+                          </select>
+                        </div>
+                        <div className="field-group">
+                          <label>Instance Type</label>
+                          <select name="instanceType" value={formData.instanceType} onChange={handleChange}>
+                            {availableInstanceTypes.map(type => <option key={type} value={type}>{type} (Free Tier Eligible)</option>)}
+                          </select>
+                        </div>
+                        <div className="field-group">
+                          <label>Security Group Ports</label>
+                          <input name="securityGroupPorts" value={formData.securityGroupPorts} onChange={handleChange} placeholder="e.g. 22, 80, 443" />
+                        </div>
+                        <div className="field-group">
+                          <label>EBS Volume Size (GB)</label>
+                          <input type="number" name="ebsVolumeSize" value={formData.ebsVolumeSize} onChange={handleChange} />
+                        </div>
+                        <div className="field-group">
+                          <label>Key Pair</label>
+                          <select name="keyPairSelection" value={formData.keyPairSelection} onChange={handleChange}>
+                            <option value="existing">Use Existing Key</option>
+                            <option value="magic-new-key">Generate New Key</option>
+                          </select>
+                        </div>
+                        <div className="field-group">
+                          <label>{formData.keyPairSelection === 'magic-new-key' ? 'New Key Name' : 'Select Key'}</label>
+                          {formData.keyPairSelection === 'magic-new-key' ? (
+                            <input name="keyPairName" value={formData.keyPairName} onChange={handleChange} />
+                          ) : (
+                            <select name="keyPairName" value={formData.keyPairName} onChange={handleChange}>
+                              {availableKeyPairs.map(k => <option key={k} value={k}>{k}</option>)}
+                            </select>
+                          )}
+                        </div>
+                        <div className="field-group" style={{ gridColumn: 'span 2', marginTop: '10px' }}>
+                          <label>Magic Software Add-ons</label>
+                          <div style={{ display: 'flex', gap: '24px', padding: '16px', background: 'var(--input-bg)', borderRadius: '12px', border: '1px solid var(--panel-border)' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', width: 'auto', fontWeight: 600 }}>
+                              <input 
+                                type="checkbox" 
+                                checked={formData.installRedis} 
+                                onChange={(e) => setFormData({...formData, installRedis: e.target.checked})} 
+                              />
+                              <Database size={16} color="var(--accent-color)" /> Install Redis
+                            </label>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
+                              Auto-configures Security Groups and installs software after deployment.
+                            </span>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="field-group">
+                          <label>Bucket Name</label>
+                          <input name="bucketName" value={formData.bucketName} onChange={handleChange} />
+                        </div>
+                        <div className="field-group">
+                          <label>ACL / Privacy</label>
+                          <select name="acl" value={formData.acl} onChange={handleChange}>
+                            <option value="private">Private (Encrypted)</option>
+                            <option value="public-read">Public Read</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <button className="btn btn-primary" style={{ marginTop: '24px' }} onClick={addToStack}><Plus size={18} /> Add to Stack</button>
+                </div>
+
+                <div style={{ marginTop: '40px' }}>
+                  <button className="btn btn-deploy" onClick={handleStepByStepDeploy} disabled={deploying || resourceStack.length === 0} style={{ width: '100%' }}>
+                    {deploying ? <Loader2 className="animate-spin" size={20} /> : <Play size={18} />}
+                    <span>{deploying ? 'Deploying...' : `Deploy Infrastructure to ${cloudProvider}`}</span>
+                  </button>
+                </div>
+              </>
+            )}
             
             {output && (
               <div className={`log-container animate-fade ${isLogMaximized ? 'maximized' : ''}`} style={{ marginTop: '32px' }}>
