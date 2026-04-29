@@ -18,8 +18,23 @@ public class TerraformController {
         return terraformService.generateTerraformCode(stack);
     }
 
-    @PostMapping("/deploy")
-    public String deploy(@RequestBody InfrastructureStackRequest stack) throws Exception {
-        return terraformService.deploy(stack);
+    @PostMapping("/init")
+    public String init(@RequestBody InfrastructureStackRequest s) throws Exception {
+        return terraformService.init(s);
+    }
+
+    @PostMapping("/validate")
+    public String validate(@RequestBody InfrastructureStackRequest s) throws Exception {
+        return terraformService.validate(s);
+    }
+
+    @PostMapping("/plan")
+    public String plan(@RequestBody InfrastructureStackRequest s) throws Exception {
+        return terraformService.plan(s);
+    }
+
+    @PostMapping("/apply")
+    public String apply(@RequestBody InfrastructureStackRequest s) throws Exception {
+        return terraformService.apply(s);
     }
 }
