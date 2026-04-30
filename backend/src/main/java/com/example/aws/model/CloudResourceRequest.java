@@ -28,6 +28,12 @@ public class CloudResourceRequest {
     private String targetInstanceId;
     private String buildCommands;
 
+    // Elastic Beanstalk Specific
+    private String appName;
+    private String environmentName;
+    private String platform;
+    private String envType; // SingleInstance, LoadBalanced
+
     // Getters and Setters
     public String getPipelineName() { return pipelineName; }
     public void setPipelineName(String pipelineName) { this.pipelineName = pipelineName; }
@@ -39,6 +45,15 @@ public class CloudResourceRequest {
     public void setTargetInstanceId(String targetInstanceId) { this.targetInstanceId = targetInstanceId; }
     public String getBuildCommands() { return buildCommands; }
     public void setBuildCommands(String buildCommands) { this.buildCommands = buildCommands; }
+
+    public String getAppName() { return appName; }
+    public void setAppName(String appName) { this.appName = appName; }
+    public String getEnvironmentName() { return environmentName; }
+    public void setEnvironmentName(String environmentName) { this.environmentName = environmentName; }
+    public String getPlatform() { return platform; }
+    public void setPlatform(String platform) { this.platform = platform; }
+    public String getEnvType() { return envType; }
+    public void setEnvType(String envType) { this.envType = envType; }
 
     // Getters and Setters
     public List<String> getSelectedSoftware() { return selectedSoftware; }

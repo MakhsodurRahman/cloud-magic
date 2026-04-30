@@ -56,6 +56,7 @@ public class TerraformService {
             if ("EC2".equalsIgnoreCase(config.getServiceType())) generateEc2Code(config, sb);
             else if ("S3".equalsIgnoreCase(config.getServiceType())) generateS3Code(config, sb);
             else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) generatePipelineCode(config, sb);
+            else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) generateElasticBeanstalkCode(config, sb);
         }
         return sb.toString();
     }
@@ -66,9 +67,74 @@ public class TerraformService {
         if ("EC2".equalsIgnoreCase(config.getServiceType())) name = config.getInstanceName();
         else if ("S3".equalsIgnoreCase(config.getServiceType())) name = config.getBucketName();
         else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) name = config.getPipelineName();
+        else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) name = config.getAppName();
         
         String safeName = name.replaceAll("[^a-zA-Z0-9-]", "_").toLowerCase();
         return type + "_" + safeName;
+    }
+
+    private void generateElasticBeanstalkCode(CloudResourceRequest config, StringBuilder sb) {
+        String safeEnvName = config.getEnvironmentName().replaceAll("[^a-zA-Z0-9-]", "-");
+        
+        // 1. IAM Role & Instance Profile (Mandatory for Beanstalk EC2 instances)
+        sb.append("resource \"aws_iam_role\" \"beanstalk_ec2_").append(safeEnvName).append("\" {\n");
+        sb.append("  name = \"").append(safeEnvName).append("-ec2-role\"\n");
+        sb.append("  assume_role_policy = jsonencode({\n");
+        sb.append("    Version = \"2012-10-17\"\n");
+        sb.append("    Statement = [{ Action = \"sts:AssumeRole\", Effect = \"Allow\", Principal = { Service = \"ec2.amazonaws.com\" } }]\n");
+        sb.append("  })\n");
+        sb.append("}\n\n");
+        
+        sb.append("resource \"aws_iam_role_policy_attachment\" \"beanstalk_web_tier_").append(safeEnvName).append("\" {\n");
+        sb.append("  role       = aws_iam_role.beanstalk_ec2_").append(safeEnvName).append(".name\n");
+        sb.append("  policy_arn = \"arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier\"\n");
+        sb.append("}\n\n");
+
+        sb.append("resource \"aws_iam_instance_profile\" \"beanstalk_profile_").append(safeEnvName).append("\" {\n");
+        sb.append("  name = \"").append(safeEnvName).append("-profile\"\n");
+        sb.append("  role = aws_iam_role.beanstalk_ec2_").append(safeEnvName).append(".name\n");
+        sb.append("}\n\n");
+
+        // 2. Application
+        sb.append("resource \"aws_elastic_beanstalk_application\" \"app\" {\n");
+        sb.append("  name = \"").append(config.getAppName()).append("\"\n");
+        sb.append("}\n\n");
+        
+        // 3. Environment
+        sb.append("resource \"aws_elastic_beanstalk_environment\" \"env\" {\n");
+        sb.append("  name                = \"").append(safeEnvName).append("\"\n");
+        sb.append("  application         = aws_elastic_beanstalk_application.app.name\n");
+        
+        // Define stack based on platform
+        String solutionStack = "64bit Amazon Linux 2023 v6.1.1 running Node.js 20";
+        if ("java".equalsIgnoreCase(config.getPlatform())) {
+            solutionStack = "64bit Amazon Linux 2023 v4.1.1 running Corretto 21";
+        } else if ("python".equalsIgnoreCase(config.getPlatform())) {
+            solutionStack = "64bit Amazon Linux 2023 v4.0.1 running Python 3.11";
+        } else if ("docker".equalsIgnoreCase(config.getPlatform())) {
+            solutionStack = "64bit Amazon Linux 2023 v4.0.1 running Docker";
+        }
+        
+        sb.append("  solution_stack_name = \"").append(solutionStack).append("\"\n\n");
+        
+        sb.append("  setting {\n");
+        sb.append("    namespace = \"aws:autoscaling:launchconfiguration\"\n");
+        sb.append("    name      = \"IamInstanceProfile\"\n");
+        sb.append("    value     = aws_iam_instance_profile.beanstalk_profile_").append(safeEnvName).append(".name\n");
+        sb.append("  }\n\n");
+        
+        sb.append("  setting {\n");
+        sb.append("    namespace = \"aws:autoscaling:launchconfiguration\"\n");
+        sb.append("    name      = \"InstanceType\"\n");
+        sb.append("    value     = \"").append(config.getInstanceType() != null ? config.getInstanceType() : "t3.micro").append("\"\n");
+        sb.append("  }\n\n");
+        
+        sb.append("  setting {\n");
+        sb.append("    namespace = \"aws:elasticbeanstalk:environment\"\n");
+        sb.append("    name      = \"EnvironmentType\"\n");
+        sb.append("    value     = \"").append(config.getEnvType() != null ? config.getEnvType() : "SingleInstance").append("\"\n");
+        sb.append("  }\n");
+        sb.append("}\n\n");
     }
 
     private void generatePipelineCode(CloudResourceRequest config, StringBuilder sb) {
