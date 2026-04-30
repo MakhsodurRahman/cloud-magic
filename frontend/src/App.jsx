@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Server, Shield, Database, Globe, Play, Code, CheckCircle2, Loader2, Plus, Trash2, Terminal, Box, AlertTriangle, RefreshCw, Sun, Moon, Cpu, Cloud, GitBranch } from 'lucide-react';
+import WebTerminal from './components/WebTerminal';
 
 const App = () => {
   const [activeService, setActiveService] = useState('EC2');
@@ -11,6 +12,7 @@ const App = () => {
   const [deploymentStatus, setDeploymentStatus] = useState({ step: '', status: '', message: '' });
   const [isConnected, setIsConnected] = useState(false);
   const [pendingKeyFile, setPendingKeyFile] = useState(null);
+  const [activeTerminal, setActiveTerminal] = useState(null);
 
   const handleKeyUpload = async () => {
     if (!pendingKeyFile) return;
@@ -53,7 +55,11 @@ const App = () => {
     repoUrl: '',
     branch: 'main',
     targetInstanceId: '',
-    buildCommands: 'npm test'
+    buildCommands: 'npm test',
+    appName: 'my-beanstalk-app',
+    environmentName: 'my-beanstalk-env',
+    platform: 'nodejs',
+    envType: 'SingleInstance'
   });
 
   const toggleSoftware = (software) => {
@@ -436,6 +442,9 @@ const App = () => {
               <div className={`nav-item ${activeService === 'PIPELINE' ? 'active' : ''}`} onClick={() => setActiveService('PIPELINE')}>
                 <GitBranch size={18} /> <span>CI/CD</span>
               </div>
+              <div className={`nav-item ${activeService === 'ELASTIC_BEANSTALK' ? 'active' : ''}`} onClick={() => setActiveService('ELASTIC_BEANSTALK')}>
+                <Globe size={18} /> <span>Beanstalk</span>
+              </div>
             </nav>
 
             <div className="field-group">
@@ -702,7 +711,15 @@ const App = () => {
                     </tbody>
                   </table>
                   
-                  <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
+                  <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                    <button 
+                      className="btn btn-primary" 
+                      onClick={() => setActiveTerminal(runningInstances.find(i => i.id === selectedInstanceId))}
+                      disabled={!selectedInstanceId}
+                      style={{ padding: '6px 16px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '8px' }}
+                    >
+                      <Terminal size={14} /> Open SSH Terminal
+                    </button>
                     <button className="btn" onClick={fetchInstances} style={{ border: '1px solid var(--panel-border)', fontSize: '0.8rem' }}>
                       <RefreshCw size={14} /> Refresh Machine List
                     </button>
@@ -845,6 +862,41 @@ const App = () => {
                             />
                           </div>
                         </>
+                      ) : activeService === 'ELASTIC_BEANSTALK' ? (
+                        <>
+                          <div className="field-group">
+                            <label>Application Name</label>
+                            <input name="appName" value={formData.appName || ''} onChange={handleChange} placeholder="e.g. my-awesome-app" />
+                          </div>
+                          <div className="field-group">
+                            <label>Environment Name</label>
+                            <input name="environmentName" value={formData.environmentName || ''} onChange={handleChange} placeholder="e.g. my-awesome-app-prod" />
+                          </div>
+                          <div className="field-group">
+                            <label>Platform (Solution Stack)</label>
+                            <select name="platform" value={formData.platform || 'nodejs'} onChange={handleChange}>
+                              <option value="nodejs">Node.js</option>
+                              <option value="java">Java (Corretto)</option>
+                              <option value="python">Python</option>
+                              <option value="docker">Docker</option>
+                            </select>
+                          </div>
+                          <div className="field-group">
+                            <label>Environment Type</label>
+                            <select name="envType" value={formData.envType || 'SingleInstance'} onChange={handleChange}>
+                              <option value="SingleInstance">Single Instance (Free Tier / Dev)</option>
+                              <option value="LoadBalanced">Load Balanced (Production)</option>
+                            </select>
+                          </div>
+                          <div className="field-group">
+                            <label>Instance Type</label>
+                            <select name="instanceType" value={formData.instanceType || 't3.micro'} onChange={handleChange}>
+                              <option value="t3.micro">t3.micro</option>
+                              <option value="t2.micro">t2.micro</option>
+                              <option value="t3.small">t3.small</option>
+                            </select>
+                          </div>
+                        </>
                       ) : (
                         <>
                           <div className="field-group">
@@ -937,6 +989,15 @@ const App = () => {
         </div>
         <div className="code-block">{terraformCode || "# Build your stack to see HCL..."}</div>
       </section>
+
+      {activeTerminal && (
+        <WebTerminal 
+          host={activeTerminal.ip} 
+          user={sshUser} 
+          keyName={activeTerminal.keyName || formData.keyPairName} 
+          onClose={() => setActiveTerminal(null)} 
+        />
+      )}
     </div>
   );
 };
