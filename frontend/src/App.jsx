@@ -157,16 +157,42 @@ export default function App() {
         fetchMeta('/regions', setAvailableRegions);
         setIsConnected(true);
         setStage('dashboard');
+        // Small delay to ensure state is committed before heavy dashboard rendering
+        setTimeout(() => fetchSavedStack(), 100);
       } else {
         const msg = await res.text();
-        setAuthError(
-          msg.includes('InvalidClientTokenId') ? 'Invalid Access Key ID.' :
-            msg.includes('SignatureDoesNotMatch') ? 'Invalid Secret Access Key.' :
-              `Authentication failed: ${msg}`
-        );
+        setAuthError(msg.length > 100 ? 'Authentication failed. Check your keys.' : msg);
       }
-    } catch { setAuthError('Cannot reach the backend server.'); }
+    } catch (err) { 
+      console.error('Login error:', err);
+      setAuthError('Cannot reach the backend server.'); 
+    }
     finally { setConnecting(false); }
+  };
+
+  const fetchSavedStack = async () => {
+    try {
+      const res = await fetch(`http://localhost:8080/api/terraform/get-stack`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          orgName: orgName || 'default', 
+          accessKey: credentials.accessKey, 
+          secretKey: credentials.secretKey, 
+          region 
+        })
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        if (Array.isArray(saved)) {
+          // If any item is missing an ID (legacy data), assign one now
+          const repaired = saved.map(item => item.id ? item : { ...item, id: Date.now() + Math.random() });
+          setResourceStack(repaired);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch saved stack:', err);
+    }
   };
 
   const handleLogout = () => {
@@ -288,8 +314,18 @@ export default function App() {
         method: 'POST', 
         headers: hdrs() 
       });
-      if (res.ok) await handleExplore(); // Refresh data
-      else alert(await res.text());
+      if (res.ok) {
+        // If we terminated the instance, also remove it from the Terraform stack if it exists there
+        if (action === 'terminate') {
+          setResourceStack(prev => prev.filter(item => 
+            !(item.serviceType === 'EC2' && item.instanceId === instanceId) &&
+            !(item.serviceType === 'EC2' && item.id === instanceId) // check both internal ID and AWS ID
+          ));
+        }
+        await handleExplore(); 
+      } else {
+        alert(await res.text());
+      }
     } catch (err) { alert('Action failed: ' + err.message); }
   };
 
@@ -299,8 +335,15 @@ export default function App() {
         method: 'DELETE', 
         headers: hdrs() 
       });
-      if (res.ok) await handleExplore(); // Refresh data
-      else alert(await res.text());
+      if (res.ok) {
+        // Also remove from the Terraform stack if it exists there
+        setResourceStack(prev => prev.filter(item => 
+          !(item.serviceType === 'S3' && item.bucketName === bucketName)
+        ));
+        await handleExplore(); 
+      } else {
+        alert(await res.text());
+      }
     } catch (err) { alert('Delete failed: ' + err.message); }
   };
 

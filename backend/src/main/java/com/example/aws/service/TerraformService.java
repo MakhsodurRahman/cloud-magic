@@ -7,6 +7,7 @@ import com.amazonaws.services.ec2.AmazonEC2ClientBuilder;
 import com.amazonaws.services.ec2.model.*;
 import com.example.aws.model.CloudResourceRequest;
 import com.example.aws.model.InfrastructureStackRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import java.io.*;
 import java.nio.file.*;
@@ -15,6 +16,7 @@ import java.util.stream.Stream;
 
 @Service
 public class TerraformService {
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     // Base workspace root — org-scoped sub-directories are created beneath this
     private static final String WORKDIR_ROOT = "terraform-workdir";
@@ -453,6 +455,31 @@ public class TerraformService {
         }
 
         Files.write(orgPath.resolve("main.tf"), mainTf.toString().getBytes());
+        saveStack(stack);
+    }
+
+    private void saveStack(InfrastructureStackRequest stack) {
+        try {
+            String orgWorkdir = getOrgWorkdir(stack);
+            Path stackJsonPath = Paths.get(orgWorkdir).resolve("stack.json");
+            objectMapper.writeValue(stackJsonPath.toFile(), stack.getResources());
+        } catch (Exception e) {
+            System.err.println("Failed to save stack.json: " + e.getMessage());
+        }
+    }
+
+    public List<CloudResourceRequest> loadStack(InfrastructureStackRequest request) {
+        try {
+            String orgWorkdir = getOrgWorkdir(request);
+            Path stackJsonPath = Paths.get(orgWorkdir).resolve("stack.json");
+            if (Files.exists(stackJsonPath)) {
+                CloudResourceRequest[] resources = objectMapper.readValue(stackJsonPath.toFile(), CloudResourceRequest[].class);
+                return Arrays.asList(resources);
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to load stack.json: " + e.getMessage());
+        }
+        return new ArrayList<>();
     }
 
     private void ensureKeyPairExists(String keyName, InfrastructureStackRequest stack) {

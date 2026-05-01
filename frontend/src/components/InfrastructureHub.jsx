@@ -174,7 +174,7 @@ const InfrastructureHub = ({
                         {SERVICE_LABEL[res.serviceType]}: {res.instanceName || res.bucketName || res.pipelineName || res.appName}
                       </span>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        ID: {res.id.toString().slice(-6)}
+                        ID: {res.id ? res.id.toString().slice(-6) : 'NEW'}
                       </span>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>

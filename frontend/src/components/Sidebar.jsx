@@ -52,8 +52,8 @@ const Sidebar = ({
             {resourceStack.length}
           </span>
         </div>
-        {resourceStack.map(res => (
-          <div key={res.id} className="stack-item">
+        {resourceStack.map((res, idx) => (
+          <div key={res.id || `fallback-${idx}`} className="stack-item">
             <span style={{ fontSize: '0.8rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {res.serviceType}: {res.instanceName || res.bucketName || res.pipelineName || res.appName}
             </span>

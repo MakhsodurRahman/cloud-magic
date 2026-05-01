@@ -42,4 +42,9 @@ public class TerraformController {
     public String destroy(@RequestBody InfrastructureStackRequest s) throws Exception {
         return terraformService.destroy(s);
     }
+
+    @PostMapping("/get-stack")
+    public java.util.List<com.example.aws.model.CloudResourceRequest> getStack(@RequestBody InfrastructureStackRequest s) {
+        return terraformService.loadStack(s);
+    }
 }
