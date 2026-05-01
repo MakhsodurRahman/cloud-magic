@@ -13,6 +13,15 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.rds.AmazonRDS;
+import com.amazonaws.services.rds.AmazonRDSClientBuilder;
+import com.amazonaws.services.identitymanagement.AmazonIdentityManagement;
+import com.amazonaws.services.identitymanagement.AmazonIdentityManagementClientBuilder;
+import com.amazonaws.services.lambda.AWSLambda;
+import com.amazonaws.services.lambda.AWSLambdaClientBuilder;
+
 @Service
 public class AwsMetadataService {
 
@@ -139,5 +148,97 @@ public class AwsMetadataService {
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
+    }
+    public Map<String, Object> getAccountExploration(String region, String accessKey, String secretKey) {
+        Map<String, Object> exploration = new HashMap<>();
+        BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+        AWSStaticCredentialsProvider credentialsProvider = new AWSStaticCredentialsProvider(credentials);
+        String awsRegion = region != null ? region : "us-east-1";
+
+        try {
+            // EC2
+            AmazonEC2 ec2 = AmazonEC2ClientBuilder.standard().withCredentials(credentialsProvider).withRegion(awsRegion).build();
+            List<Map<String, String>> ec2List = new ArrayList<>();
+            for (Reservation reservation : ec2.describeInstances().getReservations()) {
+                for (Instance instance : reservation.getInstances()) {
+                    Map<String, String> map = new HashMap<>();
+                    map.put("id", instance.getInstanceId());
+                    map.put("state", instance.getState().getName());
+                    map.put("type", instance.getInstanceType());
+                    ec2List.add(map);
+                }
+            }
+            exploration.put("EC2", ec2List);
+
+            // S3
+            AmazonS3 s3 = AmazonS3ClientBuilder.standard().withCredentials(credentialsProvider).withRegion(awsRegion).build();
+            List<Map<String, String>> s3List = s3.listBuckets().stream().map(b -> {
+                Map<String, String> map = new HashMap<>();
+                map.put("name", b.getName());
+                map.put("creationDate", b.getCreationDate().toString());
+                return map;
+            }).collect(Collectors.toList());
+            exploration.put("S3", s3List);
+
+            // RDS
+            AmazonRDS rds = AmazonRDSClientBuilder.standard().withCredentials(credentialsProvider).withRegion(awsRegion).build();
+            List<Map<String, String>> rdsList = rds.describeDBInstances().getDBInstances().stream().map(db -> {
+                Map<String, String> map = new HashMap<>();
+                map.put("id", db.getDBInstanceIdentifier());
+                map.put("status", db.getDBInstanceStatus());
+                map.put("engine", db.getEngine());
+                return map;
+            }).collect(Collectors.toList());
+            exploration.put("RDS", rdsList);
+
+            // IAM (IAM is global, usually us-east-1)
+            AmazonIdentityManagement iam = AmazonIdentityManagementClientBuilder.standard().withCredentials(credentialsProvider).withRegion("us-east-1").build();
+            List<Map<String, String>> iamList = iam.listUsers().getUsers().stream().map(u -> {
+                Map<String, String> map = new HashMap<>();
+                map.put("name", u.getUserName());
+                map.put("arn", u.getArn());
+                return map;
+            }).collect(Collectors.toList());
+            exploration.put("IAM", iamList);
+
+            // Lambda
+            AWSLambda lambda = AWSLambdaClientBuilder.standard().withCredentials(credentialsProvider).withRegion(awsRegion).build();
+            List<Map<String, String>> lambdaList = lambda.listFunctions().getFunctions().stream().map(f -> {
+                Map<String, String> map = new HashMap<>();
+                map.put("name", f.getFunctionName());
+                map.put("runtime", f.getRuntime());
+                map.put("state", f.getState());
+                return map;
+            }).collect(Collectors.toList());
+            exploration.put("Lambda", lambdaList);
+
+        } catch (Exception e) {
+            exploration.put("error", e.getMessage());
+        }
+        return exploration;
+    }
+
+    public void stopInstance(String instanceId, String region, String accessKey, String secretKey) {
+        AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+        ec2.stopInstances(new StopInstancesRequest().withInstanceIds(instanceId));
+    }
+
+    public void startInstance(String instanceId, String region, String accessKey, String secretKey) {
+        AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+        ec2.startInstances(new StartInstancesRequest().withInstanceIds(instanceId));
+    }
+
+    public void terminateInstance(String instanceId, String region, String accessKey, String secretKey) {
+        AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+        ec2.terminateInstances(new TerminateInstancesRequest().withInstanceIds(instanceId));
+    }
+
+    public void deleteS3Bucket(String bucketName, String region, String accessKey, String secretKey) {
+        BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+        AmazonS3 s3 = AmazonS3ClientBuilder.standard()
+                .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                .withRegion(region != null ? region : "us-east-1")
+                .build();
+        s3.deleteBucket(bucketName);
     }
 }

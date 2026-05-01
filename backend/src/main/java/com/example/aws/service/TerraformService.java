@@ -11,12 +11,14 @@ import org.springframework.stereotype.Service;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.stream.Stream;
 
 @Service
 public class TerraformService {
 
-    private static final String TERRAFORM_DIR = "terraform-workdir";
-    private static final String VAULT_DIR = "vault/keys"; // Relative to project root
+    // Base workspace root — org-scoped sub-directories are created beneath this
+    private static final String WORKDIR_ROOT = "terraform-workdir";
+    private static final String VAULT_DIR    = "vault/keys";
 
     private AmazonEC2 getEc2Client(InfrastructureStackRequest stack) {
         BasicAWSCredentials credentials = new BasicAWSCredentials(stack.getAccessKey(), stack.getSecretKey());
@@ -24,6 +26,28 @@ public class TerraformService {
                 .withCredentials(new AWSStaticCredentialsProvider(credentials))
                 .withRegion(stack.getRegion())
                 .build();
+    }
+
+    /**
+     * Derives the org-scoped workspace directory.
+     * Priority: explicit orgName from request → first 8 chars of access key (fallback)
+     * Examples:
+     *   orgName="acme-corp"   → terraform-workdir/org-acme-corp/
+     *   orgName=""            → terraform-workdir/org-akia1234/
+     */
+    private String getOrgWorkdir(InfrastructureStackRequest stack) {
+        String slug;
+        String orgName = stack.getOrgName();
+        if (orgName != null && !orgName.isBlank()) {
+            // Sanitise: lowercase, spaces/special chars → hyphens
+            slug = orgName.trim().toLowerCase().replaceAll("[^a-z0-9]+", "-");
+        } else {
+            String key = stack.getAccessKey();
+            slug = (key != null && key.length() >= 8)
+                    ? key.substring(0, 8).toLowerCase()
+                    : "default";
+        }
+        return WORKDIR_ROOT + "/org-" + slug;
     }
 
     public String generateTerraformCode(InfrastructureStackRequest stack) {
@@ -363,9 +387,33 @@ public class TerraformService {
         return output.toString();
     }
 
+    public String destroy(InfrastructureStackRequest stack) throws IOException, InterruptedException {
+        prepareWorkingDirectory(stack);
+        StringBuilder output = new StringBuilder();
+        runProcess(new String[]{"terraform", "destroy", "-auto-approve", "-no-color"}, output, stack);
+        return output.toString();
+    }
+
     private void prepareWorkingDirectory(InfrastructureStackRequest stack) throws IOException, InterruptedException {
+        // ── 1. Resolve this org's isolated workspace ──────────────────────────
+        String orgWorkdir = getOrgWorkdir(stack);
+        Path orgPath = Paths.get(orgWorkdir);
+        Files.createDirectories(orgPath);
         Files.createDirectories(Paths.get(VAULT_DIR));
+
+        Path modulesPath = orgPath.resolve("modules");
         
+        // Clean old modules to ensure we don't have "ghost" resources
+        if (Files.exists(modulesPath)) {
+            try (Stream<Path> walk = Files.walk(modulesPath)) {
+                walk.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            }
+        }
+        Files.createDirectories(modulesPath);
+
+        System.out.println("[CloudMagic] Syncing workspace: " + orgPath.toAbsolutePath());
+
+        // ── 2. Ensure EC2 key pairs are in the vault ──────────────────────────
         if ("aws".equalsIgnoreCase(stack.getCloudProvider())) {
             if (stack.getResources() != null) {
                 for (CloudResourceRequest config : stack.getResources()) {
@@ -375,53 +423,36 @@ public class TerraformService {
                 }
             }
         }
-        
-        Path path = Paths.get(TERRAFORM_DIR);
-        if (!Files.exists(path)) Files.createDirectories(path);
 
-        // Clean up old individual .tf files from the root directory to avoid conflicts with modules
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(path, "*.tf")) {
+        // ── 3. Clean all old .tf files in root ───────────────────────────────
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(orgPath, "*.tf")) {
             for (Path entry : stream) {
-                if (!entry.getFileName().toString().equals("main.tf")) {
-                    Files.delete(entry);
-                }
+                Files.delete(entry);
             }
-        } catch (DirectoryIteratorException ex) {
-            System.err.println("Error cleaning up old .tf files: " + ex.getMessage());
         }
 
-        Path mainTfPath = path.resolve("main.tf");
-        String mainTfContent = "";
-        if (Files.exists(mainTfPath)) {
-            mainTfContent = new String(Files.readAllBytes(mainTfPath));
-        }
+        // ── 4. Generate fresh main.tf ────────────────────────────────────────
+        StringBuilder mainTf = new StringBuilder();
+        mainTf.append(generateProviderCode(stack));
 
-        // 1. Ensure provider is in main.tf
-        String providerCode = generateProviderCode(stack);
-        if (!mainTfContent.contains("provider \"aws\"")) {
-            Files.write(mainTfPath, providerCode.getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            mainTfContent += providerCode;
-        }
-
-        // 2. Write modules and append to main.tf
         if (stack.getResources() != null) {
             for (CloudResourceRequest config : stack.getResources()) {
                 String moduleName = getModuleName(config);
-                Path moduleDir = path.resolve("modules").resolve(moduleName);
+                Path moduleDir = modulesPath.resolve(moduleName);
                 Files.createDirectories(moduleDir);
 
-                // Write the actual resource code to the module's main.tf
+                // Write resource HCL into the module
                 String resourceCode = generateSingleResourceCode(config, stack.getCloudProvider());
                 Files.write(moduleDir.resolve("main.tf"), resourceCode.getBytes());
 
-                // Append module call to top-level main.tf if not present
-                String moduleCall = "module \"" + moduleName + "\" {\n  source = \"./modules/" + moduleName + "\"\n}\n\n";
-                if (!mainTfContent.contains("module \"" + moduleName + "\"")) {
-                    Files.write(mainTfPath, moduleCall.getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-                    mainTfContent += moduleCall;
-                }
+                // Add module call to main.tf
+                mainTf.append("module \"").append(moduleName).append("\" {\n")
+                      .append("  source = \"./modules/").append(moduleName).append("\"\n")
+                      .append("}\n\n");
             }
         }
+
+        Files.write(orgPath.resolve("main.tf"), mainTf.toString().getBytes());
     }
 
     private void ensureKeyPairExists(String keyName, InfrastructureStackRequest stack) {
@@ -451,14 +482,17 @@ public class TerraformService {
     }
 
     private void runProcess(String[] command, StringBuilder output, InfrastructureStackRequest stack) throws IOException, InterruptedException {
+        // Run terraform in the org-scoped working directory
+        String orgWorkdir = getOrgWorkdir(stack);
         ProcessBuilder pb = new ProcessBuilder(command);
-        pb.directory(new File(TERRAFORM_DIR));
-        
+        pb.directory(new File(orgWorkdir));
+        pb.redirectErrorStream(true); // merge stderr into stdout so errors appear in the log
+
         Map<String, String> env = pb.environment();
-        env.put("AWS_ACCESS_KEY_ID", stack.getAccessKey());
+        env.put("AWS_ACCESS_KEY_ID",     stack.getAccessKey());
         env.put("AWS_SECRET_ACCESS_KEY", stack.getSecretKey());
-        env.put("AWS_DEFAULT_REGION", stack.getRegion());
-        
+        env.put("AWS_DEFAULT_REGION",    stack.getRegion());
+
         Process process = pb.start();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;

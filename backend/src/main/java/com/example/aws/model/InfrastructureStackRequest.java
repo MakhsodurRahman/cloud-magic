@@ -7,6 +7,7 @@ public class InfrastructureStackRequest {
     private String cloudProvider; // "AWS", "Azure", "GCP"
     private String accessKey;
     private String secretKey;
+    private String orgName;       // Organisation name — used as the Terraform workspace folder
     private List<CloudResourceRequest> resources;
 
     public String getRegion() { return region; }
@@ -20,6 +21,9 @@ public class InfrastructureStackRequest {
 
     public String getSecretKey() { return secretKey; }
     public void setSecretKey(String secretKey) { this.secretKey = secretKey; }
+
+    public String getOrgName() { return orgName; }
+    public void setOrgName(String orgName) { this.orgName = orgName; }
 
     public List<CloudResourceRequest> getResources() { return resources; }
     public void setResources(List<CloudResourceRequest> resources) { this.resources = resources; }

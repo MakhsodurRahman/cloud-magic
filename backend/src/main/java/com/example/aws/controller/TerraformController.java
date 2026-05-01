@@ -37,4 +37,9 @@ public class TerraformController {
     public String apply(@RequestBody InfrastructureStackRequest s) throws Exception {
         return terraformService.apply(s);
     }
+
+    @PostMapping("/destroy")
+    public String destroy(@RequestBody InfrastructureStackRequest s) throws Exception {
+        return terraformService.destroy(s);
+    }
 }

@@ -7,7 +7,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/aws")
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = "*", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
 public class AwsMetadataController {
 
     @Autowired
@@ -70,5 +70,36 @@ public class AwsMetadataController {
         } catch (Exception e) {
             return ResponseEntity.status(401).body("Invalid IAM Credentials: " + e.getMessage());
         }
+    }
+
+    @GetMapping("/explore")
+    public Map<String, Object> exploreAccount(
+            @RequestParam String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        return metadataService.getAccountExploration(region, accessKey, secretKey);
+    }
+
+    @PostMapping("/instance-action")
+    public String instanceAction(
+            @RequestParam String action,
+            @RequestParam String instanceId,
+            @RequestParam String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        if ("start".equalsIgnoreCase(action)) metadataService.startInstance(instanceId, region, accessKey, secretKey);
+        else if ("stop".equalsIgnoreCase(action)) metadataService.stopInstance(instanceId, region, accessKey, secretKey);
+        else if ("terminate".equalsIgnoreCase(action)) metadataService.terminateInstance(instanceId, region, accessKey, secretKey);
+        return "Action " + action + " executed successfully for " + instanceId;
+    }
+
+    @DeleteMapping("/s3-bucket")
+    public String deleteBucket(
+            @RequestParam String bucketName,
+            @RequestParam String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        metadataService.deleteS3Bucket(bucketName, region, accessKey, secretKey);
+        return "Bucket " + bucketName + " deleted successfully";
     }
 }
