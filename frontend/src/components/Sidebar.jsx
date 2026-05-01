@@ -1,13 +1,14 @@
 import React from 'react';
 import {
   Box, Cpu, Compass, Cloud, Sun, Moon,
-  Trash2, ChevronRight, Layers, Terminal
+  Trash2, ChevronRight, Layers, Terminal,
+  Database, Server
 } from 'lucide-react';
 
 const TOP_NAV = [
   { id: 'INFRASTRUCTURE', label: 'Infrastructure', icon: <Layers size={16} /> },
-  { id: 'Software',       label: 'Software Manager', icon: <Cpu size={16} /> },
-  { id: 'EXPLORE',        label: 'Explore Account',  icon: <Compass size={16} /> },
+  { id: 'Software', label: 'Software Manager', icon: <Cpu size={16} /> },
+  { id: 'EXPLORE', label: 'Explore Account', icon: <Compass size={16} /> },
 ];
 
 const Sidebar = ({
@@ -15,6 +16,7 @@ const Sidebar = ({
   activeService, setActiveService,
   cloudProvider, setCloudProvider, setIsConnected,
   resourceStack, removeFromStack,
+  onPreviewResource, setShowPreview,
 }) => (
   <div className="sidebar">
     {/* Logo + theme */}
@@ -33,7 +35,10 @@ const Sidebar = ({
           <div
             key={item.id}
             className={`nav-item ${activeService === item.id ? 'active' : ''}`}
-            onClick={() => setActiveService(item.id)}
+            onClick={() => {
+              setActiveService(item.id);
+              setShowPreview(false); // Close preview when switching main tabs
+            }}
           >
             {item.icon}
             <span style={{ flexGrow: 1 }}>{item.label}</span>
@@ -52,14 +57,35 @@ const Sidebar = ({
             {resourceStack.length}
           </span>
         </div>
-        {resourceStack.map((res, idx) => (
-          <div key={res.id || `fallback-${idx}`} className="stack-item">
-            <span style={{ fontSize: '0.8rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {res.serviceType}: {res.instanceName || res.bucketName || res.pipelineName || res.appName}
-            </span>
-            <Trash2 size={13} onClick={() => removeFromStack(res.id)} style={{ cursor: 'pointer', color: 'var(--error)', flexShrink: 0, marginLeft: '6px' }} />
-          </div>
-        ))}
+        {resourceStack.map((res, idx) => {
+          const type = (res.serviceType || "").toUpperCase();
+          const getIcon = () => {
+            // Priority 1: Service Type
+            if (type === 'S3' || res.bucketName) return <Database size={13} />;
+            if (type === 'EC2' || res.instanceName) return <Server size={13} />;
+            if (type === 'PIPELINE' || res.pipelineName) return <Terminal size={13} />;
+            if (type === 'ELASTIC_BEANSTALK' || res.appName) return <Cpu size={13} />;
+            return <Terminal size={13} />;
+          };
+
+          return (
+            <div key={res.id || `fallback-${idx}`} className="stack-item" style={{ cursor: 'pointer' }} onClick={() => onPreviewResource(res)}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexGrow: 1, overflow: 'hidden' }}>
+                <span style={{ color: 'var(--accent)', display: 'flex', alignItems: 'center', opacity: 0.8 }}>
+                  {getIcon()}
+                </span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)' }}>
+                  {res.bucketName || res.instanceName || res.pipelineName || res.appName || res.serviceType || 'Resource'}
+                </span>
+              </div>
+              <Trash2
+                size={13}
+                onClick={(e) => { e.stopPropagation(); removeFromStack(res.id); }}
+                style={{ cursor: 'pointer', color: 'var(--error)', flexShrink: 0, marginLeft: '6px', opacity: 0.6 }}
+              />
+            </div>
+          );
+        })}
       </div>
     )}
 

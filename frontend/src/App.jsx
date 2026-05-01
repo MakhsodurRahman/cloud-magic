@@ -75,6 +75,7 @@ export default function App() {
   const [output, setOutput] = useState('');
   const [isLogMax, setIsLogMax] = useState(false);
   const [terraformCode, setTerraformCode] = useState('');
+  const [showPreview, setShowPreview] = useState(false);
 
   /* ── Explore ── */
   const [explorationData, setExplorationData] = useState(null);
@@ -163,9 +164,9 @@ export default function App() {
         const msg = await res.text();
         setAuthError(msg.length > 100 ? 'Authentication failed. Check your keys.' : msg);
       }
-    } catch (err) { 
+    } catch (err) {
       console.error('Login error:', err);
-      setAuthError('Cannot reach the backend server.'); 
+      setAuthError('Cannot reach the backend server.');
     }
     finally { setConnecting(false); }
   };
@@ -175,11 +176,11 @@ export default function App() {
       const res = await fetch(`http://localhost:8080/api/terraform/get-stack`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          orgName: orgName || 'default', 
-          accessKey: credentials.accessKey, 
-          secretKey: credentials.secretKey, 
-          region 
+        body: JSON.stringify({
+          orgName: orgName || 'default',
+          accessKey: credentials.accessKey,
+          secretKey: credentials.secretKey,
+          region
         })
       });
       if (res.ok) {
@@ -194,6 +195,8 @@ export default function App() {
       console.error('Failed to fetch saved stack:', err);
     }
   };
+
+  const handleRefreshStack = fetchSavedStack;
 
   const handleLogout = () => {
     setCloudProvider(null); setIsConnected(false);
@@ -246,7 +249,53 @@ export default function App() {
     setSelectedService(item.serviceType);
   };
 
-  const removeFromStack = id => setResourceStack(p => p.filter(r => r.id !== id));
+  const removeFromStack = async (res) => {
+    try {
+      const type = (res.serviceType || 'unknown').toLowerCase();
+      const name = res.bucketName || res.instanceName || res.appName || res.environmentName || res.name;
+      
+      if (!name) return;
+
+      // Reconstruct module folder name (must match backend's getModuleName)
+      const safeName = name.replaceAll(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
+      const moduleName = `${type}_${safeName}`;
+
+      console.log(`Attempting physical deletion of module: ${moduleName} for org: ${orgName}`);
+
+      const response = await fetch(`http://localhost:8080/api/terraform/delete-module?moduleName=${moduleName}&orgName=${orgName || ''}`, {
+        method: 'POST',
+        headers: hdrs()
+      });
+      
+      if (!response.ok) {
+        console.warn("Backend failed to delete folder physically. Folder might not exist.");
+      }
+      
+      await handleRefreshStack();
+    } catch (err) {
+      console.error("Failed to physically delete module:", err);
+    }
+  };
+
+  const handleSelectResource = async (res) => {
+    setShowPreview(true); // Open the preview panel
+    setTerraformCode("# Loading code from disk...");
+    try {
+      const type = res.serviceType.toLowerCase();
+      const name = res.instanceName || res.bucketName || res.appName || res.environmentName || res.name;
+      // Re-construct the exact folder name used on disk
+      const safeName = name.replaceAll(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
+      const moduleName = `${type}_${safeName}`;
+
+      const response = await fetch(`http://localhost:8080/api/terraform/preview-resource?moduleName=${moduleName}&orgName=${orgName}`, {
+        method: 'POST',
+        headers: hdrs()
+      });
+      setTerraformCode(await response.text());
+    } catch (err) {
+      setTerraformCode("# Error loading code from disk.");
+    }
+  };
 
   const handleDeploy = async () => {
     if (!resourceStack.length) { setOutput('⚠ Add at least one resource before deploying.\n'); return; }
@@ -310,19 +359,20 @@ export default function App() {
 
   const handleInstanceAction = async (instanceId, action) => {
     try {
-      const res = await fetch(`http://localhost:8080/api/aws/instance-action?action=${action}&instanceId=${instanceId}&region=${region}`, { 
-        method: 'POST', 
-        headers: hdrs() 
+      const res = await fetch(`http://localhost:8080/api/aws/instance-action?action=${action}&instanceId=${instanceId}&region=${region}`, {
+        method: 'POST',
+        headers: hdrs()
       });
       if (res.ok) {
-        // If we terminated the instance, also remove it from the Terraform stack if it exists there
+        // If terminated, also delete the Terraform module if it matches this instance
         if (action === 'terminate') {
-          setResourceStack(prev => prev.filter(item => 
-            !(item.serviceType === 'EC2' && item.instanceId === instanceId) &&
-            !(item.serviceType === 'EC2' && item.id === instanceId) // check both internal ID and AWS ID
-          ));
+          const instance = explorationData?.instances?.find(i => i.id === instanceId);
+          if (instance) {
+             await removeFromStack({ serviceType: 'EC2', instanceName: instance.name || instanceId });
+          }
         }
-        await handleExplore(); 
+        await handleRefreshStack();
+        await handleExplore();
       } else {
         alert(await res.text());
       }
@@ -331,16 +381,15 @@ export default function App() {
 
   const handleDeleteBucket = async (bucketName) => {
     try {
-      const res = await fetch(`http://localhost:8080/api/aws/s3-bucket?bucketName=${bucketName}&region=${region}`, { 
-        method: 'DELETE', 
-        headers: hdrs() 
+      const res = await fetch(`http://localhost:8080/api/aws/s3-bucket?bucketName=${bucketName}&region=${region}`, {
+        method: 'DELETE',
+        headers: hdrs()
       });
       if (res.ok) {
-        // Also remove from the Terraform stack if it exists there
-        setResourceStack(prev => prev.filter(item => 
-          !(item.serviceType === 'S3' && item.bucketName === bucketName)
-        ));
-        await handleExplore(); 
+        // Physically delete the module from Terraform disk
+        await removeFromStack({ serviceType: 'S3', bucketName: bucketName });
+        await handleRefreshStack();
+        await handleExplore();
       } else {
         alert(await res.text());
       }
@@ -481,8 +530,8 @@ export default function App() {
   }
 
   /* ─── STAGE 2: Dashboard ─────────────────────────────────────── */
-  // Show the terraform right-panel only when a service config form is open
-  const showTerraformPanel = !!selectedService || deploying;
+  // Show the terraform right-panel when a service is selected, deploying, OR previewing a stack item
+  const showTerraformPanel = !!selectedService || deploying || showPreview;
 
   return (
     <div className={showTerraformPanel ? 'app-stage-dashboard' : 'app-stage-dashboard-slim'}>
@@ -523,6 +572,8 @@ export default function App() {
         cloudProvider={cloudProvider} setCloudProvider={setCloudProvider}
         setIsConnected={handleLogout}
         resourceStack={resourceStack} removeFromStack={removeFromStack}
+        onPreviewResource={handleSelectResource}
+        setShowPreview={setShowPreview}
       />
 
       {/* Main content */}
@@ -543,10 +594,10 @@ export default function App() {
 
         {/* Feature routing */}
         {activeService === 'EXPLORE' ? (
-          <AccountExplorer 
-            region={region} 
-            explorationData={explorationData} 
-            loadingExploration={loadingExplore} 
+          <AccountExplorer
+            region={region}
+            explorationData={explorationData}
+            loadingExploration={loadingExplore}
             onRefresh={handleExplore}
             onInstanceAction={handleInstanceAction}
             onDeleteBucket={handleDeleteBucket}

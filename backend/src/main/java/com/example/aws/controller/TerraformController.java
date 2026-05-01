@@ -47,4 +47,16 @@ public class TerraformController {
     public java.util.List<com.example.aws.model.CloudResourceRequest> getStack(@RequestBody InfrastructureStackRequest s) {
         return terraformService.loadStack(s);
     }
+
+    @PostMapping("/preview-resource")
+    public String previewResource(@RequestParam String moduleName, @RequestParam String orgName) {
+        return terraformService.getModuleCodeFromDisk(moduleName, orgName);
+    }
+    @PostMapping("/delete-module")
+    public void deleteModule(
+            @RequestParam String moduleName, 
+            @RequestParam String orgName,
+            @RequestHeader("X-AWS-Access-Key") String accessKey) {
+        terraformService.deleteModulePhysically(moduleName, orgName, accessKey);
+    }
 }

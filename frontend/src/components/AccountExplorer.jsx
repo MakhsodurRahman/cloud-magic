@@ -1,24 +1,45 @@
 import React, { useState } from 'react';
-import { Compass, Server, Database, Shield, Cpu, RefreshCw, Loader2 } from 'lucide-react';
+import { Compass, Server, Database, Shield, Cpu, RefreshCw, Loader2, Trash2 } from 'lucide-react';
+import ConfirmModal from './ConfirmModal';
 
 const SERVICE_DEFS = [
-  { id: 'EC2',    label: 'EC2 Instances',    icon: <Server size={36} />,   color: '#FF9900' },
-  { id: 'S3',     label: 'S3 Buckets',       icon: <Database size={36} />, color: '#3F8EFC' },
-  { id: 'RDS',    label: 'RDS Databases',    icon: <Database size={36} />, color: '#7B61FF' },
-  { id: 'Lambda', label: 'Lambda Functions', icon: <Cpu size={36} />,      color: '#00C7B7' },
-  { id: 'IAM',    label: 'IAM Users',        icon: <Shield size={36} />,   color: '#FF5F56' },
+  { id: 'EC2', label: 'EC2 Instances', icon: <Server size={36} />, color: '#FF9900' },
+  { id: 'S3', label: 'S3 Buckets', icon: <Database size={36} />, color: '#3F8EFC' },
+  { id: 'RDS', label: 'RDS Databases', icon: <Database size={36} />, color: '#7B61FF' },
+  { id: 'Lambda', label: 'Lambda Functions', icon: <Cpu size={36} />, color: '#00C7B7' },
+  { id: 'IAM', label: 'IAM Users', icon: <Shield size={36} />, color: '#FF5F56' },
 ];
 
 const AccountExplorer = ({ region, explorationData, loadingExploration, onRefresh, onInstanceAction, onDeleteBucket }) => {
-  const [activeService, setActiveService] = useState(null);
-  const [performingAction, setPerformingAction] = useState(null); // stores item ID being acted upon
+  const [activeService, setActiveService] = useState('EC2');
+  const [expandedItems, setExpandedItems] = useState({});
+  const [performingAction, setPerformingAction] = useState(null);
+  const [confirmModal, setConfirmModal] = useState({ show: false, service: '', item: null, action: '' });
 
-  const handleAction = async (type, item, action) => {
-    const id = item.id || item.name;
-    setPerformingAction(id);
-    if (type === 'EC2') await onInstanceAction(item.id, action);
-    if (type === 'S3') await onDeleteBucket(item.name);
-    setPerformingAction(null);
+  const toggleExpand = (id) => {
+    setExpandedItems(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleAction = (service, item, action) => {
+    if (action === 'terminate' || action === 'delete') {
+      setConfirmModal({ show: true, service, item, action });
+      return;
+    }
+    executeAction(service, item, action);
+  };
+
+  const executeAction = async (service, item, action) => {
+    setPerformingAction(item.id || item.name);
+    try {
+      if (service === 'EC2') await onInstanceAction(item.id, action);
+      else if (service === 'S3') await onDeleteBucket(item.name);
+      onRefresh();
+    } catch (err) {
+      console.error("Action failed", err);
+    } finally {
+      setPerformingAction(null);
+      setConfirmModal({ show: false, item: null, action: '', service: '' });
+    }
   };
 
   if (loadingExploration) {
@@ -32,7 +53,7 @@ const AccountExplorer = ({ region, explorationData, loadingExploration, onRefres
 
   return (
     <div className="config-panel animate-fade">
-      {/* Header */}
+      {/* Header logic ... */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '28px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {activeService ? (
@@ -54,14 +75,14 @@ const AccountExplorer = ({ region, explorationData, loadingExploration, onRefres
         </button>
       </div>
 
-      {/* Error banner */}
+      {/* Error banner ... */}
       {explorationData?.error && (
         <div style={{ color: 'var(--error)', padding: '14px 16px', background: 'rgba(255,59,48,0.1)', borderRadius: '10px', marginBottom: '24px', fontSize: '0.9rem' }}>
           {explorationData.error}
         </div>
       )}
 
-      {/* Service Cards Grid */}
+      {/* Service Cards Grid ... */}
       {!activeService ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '20px' }}>
           {SERVICE_DEFS.map(svc => {
@@ -136,69 +157,141 @@ const AccountExplorer = ({ region, explorationData, loadingExploration, onRefres
                       <p style={{ fontSize: '1rem', margin: 0 }}>No {activeService} resources found in {region}.</p>
                     </div>
                   ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
-                      {items.map((item, idx) => {
-                        const itemId = item.id || item.name;
-                        const isActing = performingAction === itemId;
-                        return (
-                          <div key={idx} style={{ background: 'rgba(0,0,0,0.1)', padding: '16px', borderRadius: '12px', fontSize: '0.85rem', border: `1px solid ${svc.color}22`, display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ flexGrow: 1, marginBottom: '16px' }}>
-                              {Object.entries(item).map(([k, v]) => (
-                                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', paddingBottom: '6px', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                                  <span style={{ color: 'var(--text-secondary)', textTransform: 'capitalize', fontWeight: 500 }}>{k}</span>
-                                  <span style={{ fontWeight: 700, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right', color: svc.color }} title={String(v)}>
-                                    {String(v)}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '24px' }}>
+                        {items.map((item, idx) => {
+                          const itemId = item.id || item.name;
+                          const isActing = performingAction === itemId;
+                          const isExpanded = expandedItems[itemId];
+                          const isRunning = item.state === 'running';
+
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                background: 'var(--surface)',
+                                borderRadius: 'var(--radius-lg)',
+                                border: '1px solid var(--border)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                transition: 'var(--transition)',
+                                boxShadow: 'var(--shadow)',
+                                overflow: 'hidden',
+                                cursor: 'default'
+                              }}
+                              onMouseOver={e => {
+                                e.currentTarget.style.transform = 'translateY(-6px)';
+                                e.currentTarget.style.borderColor = svc.color;
+                                e.currentTarget.style.boxShadow = `0 12px 30px -10px ${svc.color}44`;
+                              }}
+                              onMouseOut={e => {
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.borderColor = 'var(--border)';
+                                e.currentTarget.style.boxShadow = 'var(--shadow)';
+                              }}
+                            >
+                              {/* Card Header */}
+                              <div style={{ padding: '20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div>
+                                  <h4 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: 'var(--text)' }}>
+                                    {item.name || 'Resource'}
+                                  </h4>
+                                  <span style={{ fontSize: '0.7rem', color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                                    {item.id}
                                   </span>
                                 </div>
-                              ))}
-                            </div>
-
-                            {/* Resource Actions */}
-                            {['EC2', 'S3'].includes(activeService) && (
-                              <div style={{ display: 'flex', gap: '8px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '14px' }}>
-                                {activeService === 'EC2' && (
-                                  <>
-                                    <button 
-                                      className="btn" 
-                                      disabled={isActing || item.state === 'running'} 
-                                      style={{ padding: '6px 12px', fontSize: '0.75rem', flexGrow: 1 }}
-                                      onClick={() => handleAction('EC2', item, 'start')}
-                                    >
-                                      {isActing ? '...' : 'Start'}
-                                    </button>
-                                    <button 
-                                      className="btn" 
-                                      disabled={isActing || item.state === 'stopped'} 
-                                      style={{ padding: '6px 12px', fontSize: '0.75rem', flexGrow: 1 }}
-                                      onClick={() => handleAction('EC2', item, 'stop')}
-                                    >
-                                      {isActing ? '...' : 'Stop'}
-                                    </button>
-                                    <button 
-                                      className="btn" 
-                                      disabled={isActing} 
-                                      style={{ padding: '6px 12px', fontSize: '0.75rem', flexGrow: 1, color: '#FF5F56', borderColor: 'rgba(255,95,86,0.3)' }}
-                                      onClick={() => { if(window.confirm('Terminate this instance?')) handleAction('EC2', item, 'terminate') }}
-                                    >
-                                      Terminate
-                                    </button>
-                                  </>
-                                )}
-                                {activeService === 'S3' && (
-                                  <button 
-                                    className="btn" 
-                                    disabled={isActing} 
-                                    style={{ padding: '6px 12px', fontSize: '0.75rem', flexGrow: 1, color: '#FF5F56', borderColor: 'rgba(255,95,86,0.3)' }}
-                                    onClick={() => { if(window.confirm('Delete this bucket?')) handleAction('S3', item, 'delete') }}
-                                  >
-                                    {isActing ? 'Deleting...' : 'Delete Bucket'}
-                                  </button>
-                                )}
+                                <div style={{
+                                  padding: '4px 12px',
+                                  borderRadius: 'var(--radius-sm)',
+                                  background: isRunning ? 'var(--success)22' : 'var(--error)22',
+                                  color: isRunning ? 'var(--success)' : 'var(--error)',
+                                  fontSize: '0.65rem',
+                                  fontWeight: 900,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.5px',
+                                  border: `1px solid ${isRunning ? 'var(--success)' : 'var(--error)'}33`
+                                }}>
+                                  {item.state || item.status || 'ACTIVE'}
+                                </div>
                               </div>
-                            )}
-                          </div>
-                        );
-                      })}
+
+                              {/* Card Body (Specs Grid) */}
+                              <div style={{ padding: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  <span style={{ fontSize: '0.6rem', color: 'var(--text-2)', textTransform: 'uppercase', fontWeight: 700 }}>Type</span>
+                                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>{item.type || 'Standard'}</span>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  <span style={{ fontSize: '0.6rem', color: 'var(--text-2)', textTransform: 'uppercase', fontWeight: 700 }}>Public IP</span>
+                                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>{item.publicIp || '—'}</span>
+                                </div>
+                              </div>
+
+                              {/* Expansion Content */}
+                              {isExpanded && (
+                                <div style={{ padding: '0 20px 20px 20px', animation: 'fadeIn 0.2s ease' }}>
+                                  <div style={{ background: 'var(--surface-2)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                                    {Object.entries(item).map(([k, v]) => {
+                                      if (['id', 'name', 'state', 'status', 'type', 'publicIp'].includes(k)) return null;
+                                      return (
+                                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '0.75rem' }}>
+                                          <span style={{ color: 'var(--text-2)', textTransform: 'capitalize' }}>{k.replace(/([A-Z])/g, ' $1')}</span>
+                                          <span style={{ color: 'var(--text)', fontWeight: 500, maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{String(v)}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Card Footer (Actions) */}
+                              <div style={{ padding: '16px 20px', background: 'var(--surface-2)', borderTop: '1px solid var(--border)', marginTop: 'auto' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                                  <button
+                                    onClick={() => toggleExpand(itemId)}
+                                    style={{ background: 'transparent', border: 'none', color: svc.color, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, padding: 0 }}
+                                    title="Toggle detailed technical specifications"
+                                  >
+                                    {isExpanded ? 'Hide Specs' : 'Show Specs'}
+                                  </button>
+
+                                  <div style={{ display: 'flex', gap: '8px' }}>
+                                    {activeService === 'EC2' && (
+                                      <>
+                                        <button
+                                          className="btn-console"
+                                          disabled={isActing || isRunning}
+                                          onClick={() => handleAction('EC2', item, 'start')}
+                                          title={isRunning ? "Instance is already running" : "Start Instance"}
+                                          style={{ width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: isRunning ? 'var(--border)' : 'var(--success)', color: isRunning ? 'var(--text-2)' : '#fff', borderRadius: 'var(--radius-sm)', border: 'none', cursor: isRunning ? 'default' : 'pointer' }}
+                                        >
+                                          {isActing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                                        </button>
+                                        <button
+                                          className="btn-console"
+                                          disabled={isActing || !isRunning}
+                                          onClick={() => handleAction('EC2', item, 'stop')}
+                                          title={!isRunning ? "Instance is already stopped" : "Stop Instance"}
+                                          style={{ width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: !isRunning ? 'var(--border)' : 'var(--warning)', color: !isRunning ? 'var(--text-2)' : '#fff', borderRadius: 'var(--radius-sm)', border: 'none', cursor: !isRunning ? 'default' : 'pointer' }}
+                                        >
+                                          <Shield size={14} />
+                                        </button>
+                                      </>
+                                    )}
+                                    <button 
+                                      className="btn-console"
+                                      disabled={isActing}
+                                      onClick={() => handleAction(activeService, item, activeService === 'EC2' ? 'terminate' : 'delete')}
+                                      title={activeService === 'EC2' ? "Terminate Instance" : "Delete Bucket"}
+                                      style={{ width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--error)22', color: 'var(--error)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--error)44', cursor: 'pointer', transition: 'all 0.2s' }}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
                   )}
                 </div>
@@ -207,6 +300,18 @@ const AccountExplorer = ({ region, explorationData, loadingExploration, onRefres
           })()}
         </div>
       )}
+      {/* Reusable Confirmation Modal */}
+      <ConfirmModal 
+        isOpen={confirmModal.show}
+        onClose={() => setConfirmModal({ show: false, item: null, action: '', service: '' })}
+        onConfirm={() => executeAction(confirmModal.service, confirmModal.item, confirmModal.action)}
+        title={confirmModal.action === 'terminate' ? "Terminate Instance?" : "Delete Bucket?"}
+        message={
+          <>You are about to permanently {confirmModal.action} <strong>{confirmModal.item?.name || confirmModal.item?.id}</strong>. This action cannot be undone.</>
+        }
+        confirmText={confirmModal.action === 'terminate' ? "Terminate" : "Delete"}
+        type="danger"
+      />
     </div>
   );
 };

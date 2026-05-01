@@ -75,7 +75,7 @@ public class TerraformService {
         return sb.toString();
     }
 
-    private String generateSingleResourceCode(CloudResourceRequest config, String cloudProvider) {
+    public String generateSingleResourceCode(CloudResourceRequest config, String cloudProvider) {
         StringBuilder sb = new StringBuilder();
         String provider = cloudProvider != null ? cloudProvider.toLowerCase() : "aws";
         if ("aws".equals(provider)) {
@@ -455,31 +455,110 @@ public class TerraformService {
         }
 
         Files.write(orgPath.resolve("main.tf"), mainTf.toString().getBytes());
-        saveStack(stack);
     }
 
-    private void saveStack(InfrastructureStackRequest stack) {
+
+    public void deleteModulePhysically(String moduleName, String orgName, String accessKey) {
         try {
-            String orgWorkdir = getOrgWorkdir(stack);
-            Path stackJsonPath = Paths.get(orgWorkdir).resolve("stack.json");
-            objectMapper.writeValue(stackJsonPath.toFile(), stack.getResources());
+            InfrastructureStackRequest dummy = new InfrastructureStackRequest();
+            dummy.setOrgName(orgName);
+            dummy.setAccessKey(accessKey);
+            
+            String orgWorkdir = getOrgWorkdir(dummy);
+            Path orgPath = Paths.get(orgWorkdir);
+            Path moduleDir = orgPath.resolve("modules").resolve(moduleName);
+
+            // 1. Physically delete the directory
+            if (Files.exists(moduleDir)) {
+                deleteDirectory(moduleDir);
+                System.out.println("Physically deleted module directory: " + moduleName);
+            }
+
+            // 2. Re-generate main.tf to remove the module call
+            List<CloudResourceRequest> remaining = loadStack(dummy);
+            
+            StringBuilder mainTf = new StringBuilder();
+            mainTf.append("provider \"aws\" {\n")
+                  .append("  region = var.region\n")
+                  .append("}\n\n")
+                  .append("variable \"region\" { type = string }\n\n");
+
+            for (CloudResourceRequest r : remaining) {
+                String mName = getModuleName(r);
+                mainTf.append("module \"").append(mName).append("\" {\n")
+                      .append("  source = \"./modules/").append(mName).append("\"\n")
+                      .append("}\n\n");
+            }
+            Files.write(orgPath.resolve("main.tf"), mainTf.toString().getBytes());
+            System.out.println("Updated main.tf after module deletion.");
+
         } catch (Exception e) {
-            System.err.println("Failed to save stack.json: " + e.getMessage());
+            System.err.println("Physical deletion failed: " + e.getMessage());
         }
+    }
+
+    private void deleteDirectory(Path path) throws IOException {
+        if (Files.isDirectory(path)) {
+            try (var stream = Files.list(path)) {
+                stream.forEach(child -> {
+                    try { deleteDirectory(child); } catch (IOException e) { throw new RuntimeException(e); }
+                });
+            }
+        }
+        Files.delete(path);
+    }
+
+
+    public String getModuleCodeFromDisk(String moduleName, String orgName) {
+        try {
+            InfrastructureStackRequest dummy = new InfrastructureStackRequest();
+            dummy.setOrgName(orgName);
+            Path modulePath = Paths.get(getOrgWorkdir(dummy)).resolve("modules").resolve(moduleName).resolve("main.tf");
+            if (Files.exists(modulePath)) {
+                return Files.readString(modulePath);
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to read module from disk: " + e.getMessage());
+        }
+        return "# Code not found on disk.";
     }
 
     public List<CloudResourceRequest> loadStack(InfrastructureStackRequest request) {
+        List<CloudResourceRequest> resources = new ArrayList<>();
         try {
             String orgWorkdir = getOrgWorkdir(request);
-            Path stackJsonPath = Paths.get(orgWorkdir).resolve("stack.json");
-            if (Files.exists(stackJsonPath)) {
-                CloudResourceRequest[] resources = objectMapper.readValue(stackJsonPath.toFile(), CloudResourceRequest[].class);
-                return Arrays.asList(resources);
+            Path modulesPath = Paths.get(orgWorkdir).resolve("modules");
+            
+            if (Files.exists(modulesPath)) {
+                try (var stream = Files.list(modulesPath)) {
+                    stream.filter(Files::isDirectory).forEach(dir -> {
+                        String dirName = dir.getFileName().toString();
+                        CloudResourceRequest r = new CloudResourceRequest();
+                        
+                        // Parse name from folder: s3_my-bucket -> my-bucket
+                        if (dirName.contains("_")) {
+                            int splitIdx = dirName.indexOf("_");
+                            String type = dirName.substring(0, splitIdx).toUpperCase();
+                            String name = dirName.substring(splitIdx + 1).replace("_", "-");
+                            
+                            r.setServiceType(type);
+                            if ("S3".equals(type)) r.setBucketName(name);
+                            else if ("EC2".equals(type)) r.setInstanceName(name);
+                            else if ("PIPELINE".equals(type)) r.setPipelineName(name);
+                            else if ("ELASTIC_BEANSTALK".equals(type)) r.setAppName(name);
+                            else r.setInstanceName(name); // fallback
+                        } else {
+                            r.setServiceType("UNKNOWN");
+                            r.setInstanceName(dirName);
+                        }
+                        resources.add(r);
+                    });
+                }
             }
         } catch (Exception e) {
-            System.err.println("Failed to load stack.json: " + e.getMessage());
+            System.err.println("Failed to load stack from modules folder: " + e.getMessage());
         }
-        return new ArrayList<>();
+        return resources;
     }
 
     private void ensureKeyPairExists(String keyName, InfrastructureStackRequest stack) {

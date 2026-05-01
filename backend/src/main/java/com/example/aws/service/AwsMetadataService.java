@@ -165,12 +165,24 @@ public class AwsMetadataService {
                     map.put("id", instance.getInstanceId());
                     map.put("state", instance.getState().getName());
                     map.put("type", instance.getInstanceType());
+                    map.put("privateIp", instance.getPrivateIpAddress());
+                    map.put("publicIp", instance.getPublicIpAddress());
+                    map.put("keyName", instance.getKeyName());
+                    map.put("launchTime", instance.getLaunchTime().toString());
+                    map.put("securityGroups", instance.getSecurityGroups().stream().map(GroupIdentifier::getGroupName).collect(Collectors.joining(", ")));
+                    
+                    String name = instance.getTags().stream()
+                            .filter(t -> t.getKey().equals("Name"))
+                            .map(Tag::getValue)
+                            .findFirst().orElse("Unnamed Instance");
+                    map.put("name", name);
+                    
                     ec2List.add(map);
                 }
             }
             exploration.put("EC2", ec2List);
 
-            // S3
+            // S3 (Keep as is, already has creationDate)
             AmazonS3 s3 = AmazonS3ClientBuilder.standard().withCredentials(credentialsProvider).withRegion(awsRegion).build();
             List<Map<String, String>> s3List = s3.listBuckets().stream().map(b -> {
                 Map<String, String> map = new HashMap<>();
@@ -180,7 +192,7 @@ public class AwsMetadataService {
             }).collect(Collectors.toList());
             exploration.put("S3", s3List);
 
-            // RDS
+            // RDS (Keep as is)
             AmazonRDS rds = AmazonRDSClientBuilder.standard().withCredentials(credentialsProvider).withRegion(awsRegion).build();
             List<Map<String, String>> rdsList = rds.describeDBInstances().getDBInstances().stream().map(db -> {
                 Map<String, String> map = new HashMap<>();
@@ -191,7 +203,7 @@ public class AwsMetadataService {
             }).collect(Collectors.toList());
             exploration.put("RDS", rdsList);
 
-            // IAM (IAM is global, usually us-east-1)
+            // IAM
             AmazonIdentityManagement iam = AmazonIdentityManagementClientBuilder.standard().withCredentials(credentialsProvider).withRegion("us-east-1").build();
             List<Map<String, String>> iamList = iam.listUsers().getUsers().stream().map(u -> {
                 Map<String, String> map = new HashMap<>();
@@ -208,6 +220,9 @@ public class AwsMetadataService {
                 map.put("name", f.getFunctionName());
                 map.put("runtime", f.getRuntime());
                 map.put("state", f.getState());
+                map.put("memory", f.getMemorySize() != null ? f.getMemorySize().toString() : "N/A");
+                map.put("lastModified", f.getLastModified());
+                map.put("description", f.getDescription());
                 return map;
             }).collect(Collectors.toList());
             exploration.put("Lambda", lambdaList);
