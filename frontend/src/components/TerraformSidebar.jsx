@@ -1,10 +1,9 @@
-import React from 'react';
-import { Code, Copy, Loader2, Zap, Terminal } from 'lucide-react';
+import { Code, Copy, Loader2, Zap, Terminal, X } from 'lucide-react';
 
-const TerraformSidebar = ({ terraformCode, deploying }) => (
-  <div className={`terraform-panel ${deploying ? 'active animate-glow' : ''}`} style={{ height: '100%' }}>
+const TerraformSidebar = ({ terraformCode, deploying, onClose }) => (
+  <div className={`terraform-panel ${deploying ? 'active animate-glow' : ''}`} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
     {/* Header */}
-    <div className="terraform-panel-header">
+    <div className="terraform-panel-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         {deploying
           ? <Zap size={18} color="var(--accent)" />
@@ -16,14 +15,27 @@ const TerraformSidebar = ({ terraformCode, deploying }) => (
           </span>
         )}
       </div>
-      <button
-        className="btn"
-        onClick={() => { if (terraformCode) navigator.clipboard.writeText(terraformCode).then(() => alert('Copied!')); }}
-        disabled={!terraformCode}
-        style={{ padding: '5px 12px', fontSize: '0.72rem', gap: '5px' }}
-      >
-        <Copy size={11} /> Copy
-      </button>
+      
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <button
+          className="btn"
+          onClick={() => { if (terraformCode) navigator.clipboard.writeText(terraformCode).then(() => alert('Copied!')); }}
+          disabled={!terraformCode}
+          style={{ padding: '5px 12px', fontSize: '0.72rem', gap: '5px' }}
+        >
+          <Copy size={11} /> Copy
+        </button>
+        
+        {onClose && (
+          <button 
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: '5px', display: 'flex', alignItems: 'center' }}
+            className="hover-opacity"
+          >
+            <X size={18} />
+          </button>
+        )}
+      </div>
     </div>
 
     {/* Code */}

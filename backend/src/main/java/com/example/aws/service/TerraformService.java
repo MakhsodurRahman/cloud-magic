@@ -323,7 +323,9 @@ public class TerraformService {
         sb.append("  name        = \"magic-sg-").append(safeName).append("\"\n");
         sb.append("  description = \"Allow traffic for ").append(config.getInstanceName()).append("\"\n\n");
 
-        List<Integer> ports = new ArrayList<>(config.getSecurityGroupPorts());
+        List<Integer> ports = config.getSecurityGroupPorts() != null 
+                ? new ArrayList<>(config.getSecurityGroupPorts()) 
+                : new ArrayList<>();
         if (config.getSelectedSoftware() != null) {
             if (config.getSelectedSoftware().contains("Redis") && !ports.contains(6379)) ports.add(6379);
             if (config.getSelectedSoftware().contains("Nginx") && !ports.contains(80)) ports.add(80);
@@ -458,6 +460,7 @@ public class TerraformService {
     }
 
 
+
     public void deleteModulePhysically(String moduleName, String orgName, String accessKey) {
         try {
             InfrastructureStackRequest dummy = new InfrastructureStackRequest();
@@ -465,43 +468,81 @@ public class TerraformService {
             dummy.setAccessKey(accessKey);
             
             String orgWorkdir = getOrgWorkdir(dummy);
-            Path orgPath = Paths.get(orgWorkdir);
-            Path moduleDir = orgPath.resolve("modules").resolve(moduleName);
-
-            // 1. Physically delete the directory
-            if (Files.exists(moduleDir)) {
-                deleteDirectory(moduleDir);
-                System.out.println("Physically deleted module directory: " + moduleName);
-            }
-
-            // 2. Re-generate main.tf to remove the module call
-            List<CloudResourceRequest> remaining = loadStack(dummy);
+            // Ensure we use an absolute path for Windows reliability
+            Path modulesRoot = Paths.get(orgWorkdir).toAbsolutePath().resolve("modules");
             
-            StringBuilder mainTf = new StringBuilder();
-            mainTf.append("provider \"aws\" {\n")
-                  .append("  region = var.region\n")
-                  .append("}\n\n")
-                  .append("variable \"region\" { type = string }\n\n");
+            System.out.println("Scanning for module deletion in: " + modulesRoot);
 
-            for (CloudResourceRequest r : remaining) {
-                String mName = getModuleName(r);
-                mainTf.append("module \"").append(mName).append("\" {\n")
-                      .append("  source = \"./modules/").append(mName).append("\"\n")
-                      .append("}\n\n");
+            if (!Files.exists(modulesRoot)) {
+                System.err.println("Critical Error: Modules directory does not exist at " + modulesRoot);
+                return;
             }
-            Files.write(orgPath.resolve("main.tf"), mainTf.toString().getBytes());
-            System.out.println("Updated main.tf after module deletion.");
 
+            // High-Resiliency Discovery: Find the folder that matches our target 
+            // even if there are hyphen/underscore discrepancies.
+            Path targetPath = null;
+            try (var stream = Files.list(modulesRoot)) {
+                targetPath = stream
+                    .filter(Files::isDirectory)
+                    .filter(path -> {
+                        String dirName = path.getFileName().toString();
+                        // Match either exactly OR after normalising both to underscores
+                        return dirName.equalsIgnoreCase(moduleName) || 
+                               dirName.replace("-", "_").equalsIgnoreCase(moduleName.replace("-", "_"));
+                    })
+                    .findFirst()
+                    .orElse(null);
+            }
+
+            if (targetPath != null && Files.exists(targetPath)) {
+                System.out.println("MATCH FOUND! Physically deleting: " + targetPath);
+                deleteDirectory(targetPath);
+                
+                // Regenerate root main.tf from the remaining folders
+                regenerateRootMainTf(orgWorkdir);
+            } else {
+                System.err.println("CRITICAL FAILURE: Module folder '" + moduleName + "' not found in " + modulesRoot);
+                // List available folders for debugging
+                try (var stream = Files.list(modulesRoot)) {
+                    System.out.println("Available folders in modules: ");
+                    stream.forEach(p -> System.out.println(" - " + p.getFileName()));
+                }
+            }
         } catch (Exception e) {
-            System.err.println("Physical deletion failed: " + e.getMessage());
+            System.err.println("Physical deletion failed for " + moduleName + ": " + e.getMessage());
+            e.printStackTrace();
         }
+    }
+
+    private void regenerateRootMainTf(String orgWorkdir) throws IOException {
+        Path mainTfPath = Paths.get(orgWorkdir, "main.tf");
+        Path modulesPath = Paths.get(orgWorkdir, "modules");
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\n");
+        sb.append("provider \"aws\" {\n  region = var.region\n}\n\n");
+        sb.append("variable \"region\" {\n  type = string\n}\n\n");
+
+        if (Files.exists(modulesPath)) {
+            try (var stream = Files.list(modulesPath)) {
+                stream.filter(Files::isDirectory).forEach(dir -> {
+                    String modName = dir.getFileName().toString();
+                    sb.append("module \"").append(modName).append("\" {\n");
+                    sb.append("  source = \"./modules/").append(modName).append("\"\n");
+                    sb.append("  region = var.region\n");
+                    sb.append("}\n\n");
+                });
+            }
+        }
+        Files.writeString(mainTfPath, sb.toString());
+        System.out.println("Root main.tf regenerated successfully at " + mainTfPath);
     }
 
     private void deleteDirectory(Path path) throws IOException {
         if (Files.isDirectory(path)) {
             try (var stream = Files.list(path)) {
                 stream.forEach(child -> {
-                    try { deleteDirectory(child); } catch (IOException e) { throw new RuntimeException(e); }
+                    try { deleteDirectory(child); } catch (IOException e) { throw new RuntimeException(child.toString(), e); }
                 });
             }
         }
@@ -535,11 +576,10 @@ public class TerraformService {
                         String dirName = dir.getFileName().toString();
                         CloudResourceRequest r = new CloudResourceRequest();
                         
-                        // Parse name from folder: s3_my-bucket -> my-bucket
                         if (dirName.contains("_")) {
                             int splitIdx = dirName.indexOf("_");
                             String type = dirName.substring(0, splitIdx).toUpperCase();
-                            String name = dirName.substring(splitIdx + 1).replace("_", "-");
+                            String name = dirName.substring(splitIdx + 1);
                             
                             r.setServiceType(type);
                             if ("S3".equals(type)) r.setBucketName(name);

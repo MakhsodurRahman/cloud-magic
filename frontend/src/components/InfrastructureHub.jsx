@@ -64,6 +64,7 @@ const InfrastructureHub = ({
   output, isLogMax, setIsLogMax, setOutput,
   selectedService, setSelectedService,
   editStackItem,
+  permissions = { EC2: true, S3: true, PIPELINE: true, ELASTIC_BEANSTALK: true },
 }) => {
   const svc = SERVICES.find(s => s.id === selectedService);
 
@@ -98,7 +99,7 @@ const InfrastructureHub = ({
           </p>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
-            {SERVICES.map(sv => (
+            {SERVICES.filter(s => permissions && permissions[s.id] !== false).map(sv => (
               <div
                 key={sv.id}
                 onClick={() => setSelectedService(sv.id)}

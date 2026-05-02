@@ -21,9 +21,59 @@ import com.amazonaws.services.identitymanagement.AmazonIdentityManagement;
 import com.amazonaws.services.identitymanagement.AmazonIdentityManagementClientBuilder;
 import com.amazonaws.services.lambda.AWSLambda;
 import com.amazonaws.services.lambda.AWSLambdaClientBuilder;
+import com.amazonaws.services.codepipeline.AWSCodePipeline;
+import com.amazonaws.services.codepipeline.AWSCodePipelineClientBuilder;
+import com.amazonaws.services.elasticbeanstalk.AWSElasticBeanstalk;
+import com.amazonaws.services.elasticbeanstalk.AWSElasticBeanstalkClientBuilder;
 
 @Service
 public class AwsMetadataService {
+
+    public Map<String, Boolean> checkPermissions(String accessKey, String secretKey, String region) {
+        Map<String, Boolean> permissions = new HashMap<>();
+        BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+        AWSStaticCredentialsProvider credProvider = new AWSStaticCredentialsProvider(credentials);
+        String r = region != null ? region : "us-east-1";
+
+        // Probe EC2
+        try {
+            AmazonEC2 ec2 = AmazonEC2ClientBuilder.standard().withCredentials(credProvider).withRegion(r).build();
+            ec2.describeInstances(new DescribeInstancesRequest().withMaxResults(5));
+            permissions.put("EC2", true);
+        } catch (Exception e) {
+            permissions.put("EC2", false);
+        }
+
+        // Probe S3
+        try {
+            AmazonS3 s3 = AmazonS3ClientBuilder.standard().withCredentials(credProvider).withRegion(r).build();
+            s3.listBuckets();
+            permissions.put("S3", true);
+        } catch (Exception e) {
+            permissions.put("S3", false);
+        }
+
+        // Probe Pipeline
+        try {
+            AWSCodePipeline cp = AWSCodePipelineClientBuilder.standard().withCredentials(credProvider).withRegion(r).build();
+            cp.listPipelines(new com.amazonaws.services.codepipeline.model.ListPipelinesRequest());
+            permissions.put("PIPELINE", true);
+        } catch (Exception e) {
+            permissions.put("PIPELINE", false);
+        }
+
+        // Probe Beanstalk
+        try {
+            AWSElasticBeanstalk eb = AWSElasticBeanstalkClientBuilder.standard().withCredentials(credProvider).withRegion(r).build();
+            // Use a valid, restrictive call to verify permissions
+            eb.listAvailableSolutionStacks();
+            permissions.put("ELASTIC_BEANSTALK", true);
+        } catch (Exception e) {
+            permissions.put("ELASTIC_BEANSTALK", false);
+        }
+
+        return permissions;
+    }
 
     private AmazonEC2 getEc2Client(String accessKey, String secretKey, String region) {
         BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
@@ -57,7 +107,7 @@ public class AwsMetadataService {
                 map.put("id", instance.getInstanceId());
                 map.put("ip", instance.getPublicIpAddress());
                 map.put("keyName", instance.getKeyName());
-                
+
                 String name = instance.getTags().stream()
                         .filter(t -> t.getKey().equals("Name"))
                         .map(Tag::getValue)
@@ -74,9 +124,9 @@ public class AwsMetadataService {
         DescribeImagesRequest request = new DescribeImagesRequest()
                 .withOwners("amazon", "099720109477")
                 .withFilters(
-                    new Filter("name").withValues("*al2023-ami-2023*", "*ubuntu-noble-24.04*", "*ubuntu-jammy-22.04*"),
-                    new Filter("state").withValues("available"),
-                    new Filter("architecture").withValues("x86_64")
+                        new Filter("name").withValues("*al2023-ami-2023*", "*ubuntu-noble-24.04*", "*ubuntu-jammy-22.04*"),
+                        new Filter("state").withValues("available"),
+                        new Filter("architecture").withValues("x86_64")
                 );
 
         return ec2.describeImages(request).getImages().stream()
@@ -99,7 +149,7 @@ public class AwsMetadataService {
             List<String> types = ec2.describeInstanceTypes(request).getInstanceTypes().stream()
                     .map(InstanceTypeInfo::getInstanceType)
                     .collect(Collectors.toList());
-            
+
             if (!types.isEmpty()) return types;
         } catch (Exception e) {
             System.err.println("AWS Instance Type fetch failed, using fallback: " + e.getMessage());
@@ -131,7 +181,7 @@ public class AwsMetadataService {
             DescribeInstancesRequest describeRequest = new DescribeInstancesRequest().withInstanceIds(instanceId);
             Instance instance = ec2.describeInstances(describeRequest).getReservations().get(0).getInstances().get(0);
             String sgId = instance.getSecurityGroups().get(0).getGroupId();
-            
+
             IpPermission ipPermission = new IpPermission()
                     .withIpProtocol("tcp")
                     .withFromPort(22)
@@ -149,6 +199,7 @@ public class AwsMetadataService {
             return "Error: " + e.getMessage();
         }
     }
+
     public Map<String, Object> getAccountExploration(String region, String accessKey, String secretKey) {
         Map<String, Object> exploration = new HashMap<>();
         BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
@@ -170,13 +221,13 @@ public class AwsMetadataService {
                     map.put("keyName", instance.getKeyName());
                     map.put("launchTime", instance.getLaunchTime().toString());
                     map.put("securityGroups", instance.getSecurityGroups().stream().map(GroupIdentifier::getGroupName).collect(Collectors.joining(", ")));
-                    
+
                     String name = instance.getTags().stream()
                             .filter(t -> t.getKey().equals("Name"))
                             .map(Tag::getValue)
                             .findFirst().orElse("Unnamed Instance");
                     map.put("name", name);
-                    
+
                     ec2List.add(map);
                 }
             }
@@ -255,5 +306,37 @@ public class AwsMetadataService {
                 .withRegion(region != null ? region : "us-east-1")
                 .build();
         s3.deleteBucket(bucketName);
+    }
+
+    public void deleteRDSInstance(String dbId, String region, String accessKey, String secretKey) {
+        BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+        AmazonRDS rds = AmazonRDSClientBuilder.standard()
+                .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                .withRegion(region)
+                .build();
+        // skipFinalSnapshot=true is common for testing/dev environments
+        rds.deleteDBInstance(new com.amazonaws.services.rds.model.DeleteDBInstanceRequest()
+                .withDBInstanceIdentifier(dbId)
+                .withSkipFinalSnapshot(true));
+    }
+
+    public void deleteLambdaFunction(String functionName, String region, String accessKey, String secretKey) {
+        BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+        AWSLambda lambda = AWSLambdaClientBuilder.standard()
+                .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                .withRegion(region)
+                .build();
+        lambda.deleteFunction(new com.amazonaws.services.lambda.model.DeleteFunctionRequest()
+                .withFunctionName(functionName));
+    }
+
+    public void deleteIAMUser(String userName, String accessKey, String secretKey) {
+        BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+        AmazonIdentityManagement iam = AmazonIdentityManagementClientBuilder.standard()
+                .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                .withRegion("us-east-1") // IAM is global
+                .build();
+        iam.deleteUser(new com.amazonaws.services.identitymanagement.model.DeleteUserRequest()
+                .withUserName(userName));
     }
 }

@@ -10,8 +10,8 @@ const SERVICE_DEFS = [
   { id: 'IAM', label: 'IAM Users', icon: <Shield size={36} />, color: '#FF5F56' },
 ];
 
-const AccountExplorer = ({ region, explorationData, loadingExploration, onRefresh, onInstanceAction, onDeleteBucket }) => {
-  const [activeService, setActiveService] = useState('EC2');
+const AccountExplorer = ({ region, explorationData, loadingExploration, onRefresh, onInstanceAction, onDeleteBucket, onDeleteResource }) => {
+  const [activeService, setActiveService] = useState(null);
   const [expandedItems, setExpandedItems] = useState({});
   const [performingAction, setPerformingAction] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ show: false, service: '', item: null, action: '' });
@@ -33,6 +33,7 @@ const AccountExplorer = ({ region, explorationData, loadingExploration, onRefres
     try {
       if (service === 'EC2') await onInstanceAction(item.id, action);
       else if (service === 'S3') await onDeleteBucket(item.name);
+      else await onDeleteResource(service, item.id || item.name);
       onRefresh();
     } catch (err) {
       console.error("Action failed", err);
@@ -281,7 +282,7 @@ const AccountExplorer = ({ region, explorationData, loadingExploration, onRefres
                                       className="btn-console"
                                       disabled={isActing}
                                       onClick={() => handleAction(activeService, item, activeService === 'EC2' ? 'terminate' : 'delete')}
-                                      title={activeService === 'EC2' ? "Terminate Instance" : "Delete Bucket"}
+                                      title={activeService === 'EC2' ? "Terminate Instance" : "Delete Resource"}
                                       style={{ width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--error)22', color: 'var(--error)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--error)44', cursor: 'pointer', transition: 'all 0.2s' }}
                                     >
                                       <Trash2 size={14} />

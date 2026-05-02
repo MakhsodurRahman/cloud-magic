@@ -3,10 +3,8 @@ import { createPortal } from 'react-dom';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
-import { Loader2, X, Minus, Square, Copy, ExternalLink } from 'lucide-react';
+import { Loader2, X, Minus, Square, Copy, ExternalLink, Terminal as TerminalIcon, Server, Play, Shield, Globe } from 'lucide-react';
 
-// Separated the actual terminal logic into a sub-component so it can be rendered 
-// either inside the main div OR inside the external popup window.
 const TerminalContent = ({ host, user, keyName, status, setStatus }) => {
   const terminalRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -25,7 +23,6 @@ const TerminalContent = ({ host, user, keyName, status, setStatus }) => {
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
     
-    // Slight delay to ensure parent container is fully rendered before fitting
     setTimeout(() => fitAddon.fit(), 50);
 
     const wsUrl = `ws://localhost:8080/api/terminal?host=${host}&user=${user}&keyName=${keyName || ''}`;
@@ -66,128 +63,126 @@ const TerminalContent = ({ host, user, keyName, status, setStatus }) => {
   return <div ref={terminalRef} style={{ width: '100%', height: '100%' }} />;
 };
 
-const WebTerminal = ({ host, user, keyName, onClose }) => {
-  const [status, setStatus] = useState('Connecting to ' + host + '...');
-  const [isMaximized, setIsMaximized] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
-  const [isPoppedOut, setIsPoppedOut] = useState(false);
+const WebTerminal = ({ explorationData, region, loading, onRefresh }) => {
+  const [activeInstance, setActiveInstance] = useState(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [status, setStatus] = useState('');
   
-  const [position, setPosition] = useState({ x: window.innerWidth / 2 - 400, y: window.innerHeight / 2 - 250 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragRef = useRef({ startX: 0, startY: 0, lastX: 0, lastY: 0 });
-  
-  const externalWindowRef = useRef(null);
-  const [externalContainer, setExternalContainer] = useState(null);
+  const instances = explorationData?.EC2 || [];
 
-  // Function to create a native OS window and portal the React component into it
-  const handlePopOut = () => {
-    setIsPoppedOut(true);
-    externalWindowRef.current = window.open('', '', 'width=800,height=500,left=200,top=200');
-    
-    if (!externalWindowRef.current) {
-      alert("Please allow popups to open the terminal in a new window.");
-      setIsPoppedOut(false);
-      return;
-    }
-
-    externalWindowRef.current.document.title = `Terminal: ${user}@${host}`;
-    externalWindowRef.current.document.body.style.margin = '0';
-    externalWindowRef.current.document.body.style.background = '#1e1e1e';
-    externalWindowRef.current.document.body.style.overflow = 'hidden';
-    
-    // Inject xterm styles into the new window
-    document.querySelectorAll('style, link[rel="stylesheet"]').forEach(el => {
-      externalWindowRef.current.document.head.appendChild(el.cloneNode(true));
-    });
-
-    const div = document.createElement('div');
-    div.style.width = '100vw';
-    div.style.height = '100vh';
-    div.style.padding = '10px';
-    div.style.boxSizing = 'border-box';
-    externalWindowRef.current.document.body.appendChild(div);
-    setExternalContainer(div);
-
-    externalWindowRef.current.addEventListener('beforeunload', () => {
-      onClose(); // Close the session entirely if the user closes the popup window
-    });
+  const handleConnect = (instance) => {
+    setActiveInstance(instance);
+    setIsConnecting(true);
+    setStatus('Connecting to ' + (instance.name || instance.id) + '...');
   };
 
-  const handleMouseDown = (e) => {
-    if (isMaximized || isPoppedOut) return;
-    setIsDragging(true);
-    dragRef.current = { startX: e.clientX, startY: e.clientY, lastX: position.x, lastY: position.y };
+  const handleBack = () => {
+    setIsConnecting(false);
+    setActiveInstance(null);
   };
 
-  const handleMouseMove = useCallback((e) => {
-    if (!isDragging) return;
-    setPosition({
-      x: dragRef.current.lastX + (e.clientX - dragRef.current.startX),
-      y: dragRef.current.lastY + (e.clientY - dragRef.current.startY)
-    });
-  }, [isDragging]);
-
-  const handleMouseUp = useCallback(() => setIsDragging(false), []);
-
-  useEffect(() => {
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    } else {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    }
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging, handleMouseMove, handleMouseUp]);
-
-  // If popped out, render the terminal into the new native window via React Portals
-  if (isPoppedOut) {
-    if (!externalContainer) return null;
-    return createPortal(
-      <TerminalContent host={host} user={user} keyName={keyName} status={status} setStatus={setStatus} />,
-      externalContainer
+  if (loading) {
+    return (
+      <div className="config-panel animate-fade" style={{ textAlign: 'center', padding: '100px 0' }}>
+        <Loader2 size={40} className="animate-spin" style={{ margin: '0 auto 20px', color: 'var(--accent)' }} />
+        <h3 style={{ margin: 0 }}>Scanning us-east-1...</h3>
+        <p style={{ color: 'var(--text-2)', fontSize: '0.9rem' }}>Locating your EC2 instances...</p>
+      </div>
     );
   }
 
-  const windowStyle = isMaximized 
-    ? { top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100vh', borderRadius: 0 }
-    : { top: position.y, left: position.x, width: '800px', height: isMinimized ? '40px' : '500px', borderRadius: '8px' };
-
-  return (
-    <>
-      {!isMaximized && !isMinimized && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9998 }} />}
-      
-      <div style={{ position: 'fixed', background: '#1e1e1e', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.6)', zIndex: 9999, transition: isDragging ? 'none' : 'width 0.2s, height 0.2s, top 0.2s, left 0.2s, border-radius 0.2s', border: '1px solid #3d3d3d', ...windowStyle }}>
-        <div onMouseDown={handleMouseDown} onDoubleClick={() => setIsMaximized(!isMaximized)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 16px', height: '40px', minHeight: '40px', background: '#2d2d2d', borderBottom: '1px solid #3d3d3d', cursor: isMaximized ? 'default' : 'grab', userSelect: 'none' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#fff', fontSize: '13px', fontWeight: 600 }}>
-            {status === 'Connected' ? <span style={{ width: 8, height: 8, background: '#4caf50', borderRadius: '50%' }}></span> : <Loader2 size={12} className="animate-spin" />}
-            {user}@{host}
+  if (isConnecting && activeInstance) {
+    // ... terminal view ...
+    return (
+      <div className="config-panel animate-fade" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button onClick={handleBack} style={{ background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer', fontWeight: 700 }}>
+              ← Back to List
+            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text)', fontSize: '0.9rem', fontWeight: 600 }}>
+              <span style={{ width: 8, height: 8, background: status === 'Connected' ? '#4caf50' : 'var(--accent)', borderRadius: '50%' }}></span>
+              ec2-user@{activeInstance.publicIp || activeInstance.privateIp}
+            </div>
           </div>
-          
-          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-            <button onClick={handlePopOut} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', padding: '4px' }} title="Pop out to new window">
-              <ExternalLink size={14} />
-            </button>
-            <button onClick={() => setIsMinimized(!isMinimized)} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', padding: '4px' }} title="Minimize">
-              <Minus size={14} />
-            </button>
-            <button onClick={() => { setIsMaximized(!isMaximized); setIsMinimized(false); }} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', padding: '4px' }} title="Maximize">
-              {isMaximized ? <Copy size={14} /> : <Square size={14} />}
-            </button>
-            <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#ff5f56', cursor: 'pointer', padding: '4px' }} title="Close">
-              <X size={14} />
-            </button>
-          </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-2)' }}>{status}</div>
         </div>
 
-        <div style={{ flexGrow: 1, padding: '10px', display: isMinimized ? 'none' : 'block', overflow: 'hidden' }}>
-          <TerminalContent host={host} user={user} keyName={keyName} status={status} setStatus={setStatus} />
+        <div style={{ flexGrow: 1, background: '#1e1e1e', borderRadius: '12px', padding: '10px', overflow: 'hidden', border: '1px solid var(--panel-border)' }}>
+          <TerminalContent 
+            host={activeInstance.publicIp || activeInstance.privateIp} 
+            user="ec2-user" 
+            keyName={activeInstance.keyName} 
+            status={status} 
+            setStatus={setStatus} 
+          />
         </div>
       </div>
-    </>
+    );
+  }
+
+  return (
+    <div className="config-panel animate-fade">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+            <TerminalIcon size={24} color="var(--accent)" />
+            <h2 style={{ margin: 0 }}>Remote Console</h2>
+          </div>
+          <p style={{ color: 'var(--text-2)', margin: 0, fontSize: '0.9rem' }}>Select an active EC2 instance to establish a secure SSH connection.</p>
+        </div>
+        <button className="btn" onClick={onRefresh} style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
+          <Loader2 size={14} className={loading ? 'animate-spin' : ''} style={{ display: loading ? 'block' : 'none' }} />
+          {!loading && <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Loader2 size={14} style={{ opacity: 0 }} /> Refresh List</span>}
+        </button>
+      </div>
+
+      {!instances || instances.length === 0 ? (
+        <div style={{ padding: '40px', textAlign: 'center', background: 'var(--panel-bg)', borderRadius: '16px', border: '1px dashed var(--panel-border)' }}>
+          <p style={{ color: 'var(--text-2)' }}>No active EC2 instances found in {region}.</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
+          {instances.map(inst => (
+            <div key={inst.id} className="provider-card" style={{ cursor: 'default', padding: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '16px' }}>
+                <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(255,153,0,0.1)', color: '#FF9900', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Server size={20} />
+                </div>
+                <div style={{ fontSize: '0.7rem', background: inst.state === 'running' ? 'rgba(48,209,88,0.1)' : 'rgba(255,59,48,0.1)', color: inst.state === 'running' ? '#30d158' : '#ff3b30', padding: '3px 8px', borderRadius: '12px', fontWeight: 700, textTransform: 'uppercase' }}>
+                  {inst.state}
+                </div>
+              </div>
+
+              <h4 style={{ margin: '0 0 4px 0', fontSize: '1rem', fontWeight: 700 }}>{inst.name || 'Unnamed Instance'}</h4>
+              <p style={{ margin: '0 0 16px 0', fontSize: '0.78rem', color: 'var(--text-2)', fontFamily: 'monospace' }}>{inst.id}</p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem' }}>
+                  <Globe size={14} color="var(--text-3)" />
+                  <span style={{ color: 'var(--text-2)' }}>IP:</span>
+                  <span style={{ fontWeight: 600 }}>{inst.publicIp || inst.privateIp}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem' }}>
+                  <Shield size={14} color="var(--text-3)" />
+                  <span style={{ color: 'var(--text-2)' }}>Key:</span>
+                  <span style={{ fontWeight: 600 }}>{inst.keyName || 'None'}</span>
+                </div>
+              </div>
+
+              <button 
+                className="btn btn-primary" 
+                onClick={() => handleConnect(inst)}
+                disabled={inst.state !== 'running'}
+                style={{ width: '100%', justifyContent: 'center', gap: '8px' }}
+              >
+                <Play size={14} fill="currentColor" /> Connect SSH
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 };
 

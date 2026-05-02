@@ -9,6 +9,7 @@ import TerraformSidebar from './components/TerraformSidebar';
 import InfrastructureHub from './components/InfrastructureHub';
 import SoftwareManager from './components/SoftwareManager';
 import AccountExplorer from './components/AccountExplorer';
+import WebTerminal from './components/WebTerminal';
 
 /* ─── Provider definitions ─────────────────────────────────────────────────── */
 const PROVIDERS = [
@@ -63,6 +64,7 @@ export default function App() {
     platform: 'nodejs', envType: 'SingleInstance',
   });
   const [resourceStack, setResourceStack] = useState([]);
+  const [permissions, setPermissions] = useState(null); // Deny-by-default until probe finishes
 
   /* ── Software ── */
   const [sshUser, setSshUser] = useState('ubuntu');
@@ -76,6 +78,7 @@ export default function App() {
   const [isLogMax, setIsLogMax] = useState(false);
   const [terraformCode, setTerraformCode] = useState('');
   const [showPreview, setShowPreview] = useState(false);
+  const [manuallyClosed, setManuallyClosed] = useState(false);
 
   /* ── Explore ── */
   const [explorationData, setExplorationData] = useState(null);
@@ -140,6 +143,20 @@ export default function App() {
     }
   }, [resourceStack, region, cloudProvider, isConnected]);
 
+  // Re-open panel when a new service is selected or preview is requested
+  useEffect(() => {
+    if (selectedService || showPreview || deploying) {
+      setManuallyClosed(false);
+    }
+  }, [selectedService, showPreview, deploying]);
+
+  // Auto-scan for instances when entering Remote Console
+  useEffect(() => {
+    if (activeService === 'TERMINAL' && !explorationData && isConnected) {
+      handleExplore();
+    }
+  }, [activeService, explorationData, isConnected]);
+
   /* ─── Handlers ─────────────────────────────────────────────────────────── */
   const selectProvider = (id) => {
     setCloudProvider(id);
@@ -156,6 +173,7 @@ export default function App() {
       const res = await fetch(`http://localhost:8080/api/aws/validate?region=${region}`, { headers: hdrs() });
       if (res.ok) {
         fetchMeta('/regions', setAvailableRegions);
+        fetchMeta(`/permissions?region=${region}`, setPermissions);
         setIsConnected(true);
         setStage('dashboard');
         // Small delay to ensure state is committed before heavy dashboard rendering
@@ -256,8 +274,9 @@ export default function App() {
       
       if (!name) return;
 
-      // Reconstruct module folder name (must match backend's getModuleName)
-      const safeName = name.replaceAll(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
+      // Reconstruct module folder name (must match backend's folder structure exactly)
+      // Since we now preserve the raw name from the backend scan, we just use it directly
+      const safeName = name.toLowerCase(); 
       const moduleName = `${type}_${safeName}`;
 
       console.log(`Attempting physical deletion of module: ${moduleName} for org: ${orgName}`);
@@ -366,7 +385,7 @@ export default function App() {
       if (res.ok) {
         // If terminated, also delete the Terraform module if it matches this instance
         if (action === 'terminate') {
-          const instance = explorationData?.instances?.find(i => i.id === instanceId);
+          const instance = explorationData?.EC2?.find(i => i.id === instanceId);
           if (instance) {
              await removeFromStack({ serviceType: 'EC2', instanceName: instance.name || instanceId });
           }
@@ -394,6 +413,44 @@ export default function App() {
         alert(await res.text());
       }
     } catch (err) { alert('Delete failed: ' + err.message); }
+  };
+
+  const handleDeleteResource = async (serviceType, resourceId) => {
+    try {
+      let endpoint = '';
+      let params = `region=${region}`;
+      let mockRes = { serviceType };
+
+      if (serviceType === 'RDS') {
+        endpoint = '/rds-instance';
+        params += `&dbId=${resourceId}`;
+        mockRes.name = resourceId; // Assuming name matches ID for RDS modules
+      } else if (serviceType === 'Lambda') {
+        endpoint = '/lambda-function';
+        params += `&functionName=${resourceId}`;
+        mockRes.name = resourceId;
+      } else if (serviceType === 'IAM') {
+        endpoint = '/iam-user';
+        params = `userName=${resourceId}`; // IAM is global
+        mockRes.name = resourceId;
+      }
+
+      const res = await fetch(`http://localhost:8080/api/aws${endpoint}?${params}`, {
+        method: 'DELETE',
+        headers: hdrs()
+      });
+
+      if (res.ok) {
+        // Universal Physical Deletion
+        await removeFromStack(mockRes);
+        await handleRefreshStack();
+        await handleExplore();
+      } else {
+        alert(await res.text());
+      }
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+    }
   };
 
 
@@ -530,8 +587,12 @@ export default function App() {
   }
 
   /* ─── STAGE 2: Dashboard ─────────────────────────────────────── */
-  // Show the terraform right-panel when a service is selected, deploying, OR previewing a stack item
-  const showTerraformPanel = !!selectedService || deploying || showPreview;
+  // Show the terraform right-panel when a service is selected (only in Infrastructure tab), 
+  // or globally when deploying or previewing a stack item.
+  const showTerraformPanel = (
+    ((activeService === 'INFRASTRUCTURE' && !!selectedService) || deploying || showPreview) && 
+    !manuallyClosed
+  );
 
   return (
     <div className={showTerraformPanel ? 'app-stage-dashboard' : 'app-stage-dashboard-slim'}>
@@ -601,6 +662,7 @@ export default function App() {
             onRefresh={handleExplore}
             onInstanceAction={handleInstanceAction}
             onDeleteBucket={handleDeleteBucket}
+            onDeleteResource={handleDeleteResource}
           />
         ) : activeService === 'Software' ? (
           <SoftwareManager
@@ -608,6 +670,14 @@ export default function App() {
             sshUser={sshUser} setSshUser={setSshUser} softwarePassword={softwarePassword} setSoftwarePassword={setSoftwarePassword}
             credentials={credentials} region={region} setOutput={setOutput}
             pendingKeyFile={pendingKeyFile} setPendingKeyFile={setPendingKeyFile} formData={formData}
+          />
+        ) : activeService === 'TERMINAL' ? (
+          <WebTerminal 
+            credentials={credentials}
+            region={region}
+            explorationData={explorationData}
+            loading={loadingExplore}
+            onRefresh={handleExplore}
           />
         ) : (
           <InfrastructureHub
@@ -621,12 +691,19 @@ export default function App() {
             output={output} isLogMax={isLogMax} setIsLogMax={setIsLogMax} setOutput={setOutput}
             selectedService={selectedService} setSelectedService={setSelectedService}
             editStackItem={editStackItem}
+            permissions={permissions}
           />
         )}
       </main>
 
       {/* Right sidebar: only when a service is configured or deploying */}
-      {showTerraformPanel && <TerraformSidebar terraformCode={terraformCode} deploying={deploying} />}
+      {showTerraformPanel && (
+        <TerraformSidebar 
+          terraformCode={terraformCode} 
+          deploying={deploying} 
+          onClose={() => setManuallyClosed(true)} 
+        />
+      )}
     </div>
   );
 }

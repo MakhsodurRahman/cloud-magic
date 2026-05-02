@@ -13,6 +13,14 @@ public class AwsMetadataController {
     @Autowired
     private AwsMetadataService metadataService;
 
+    @GetMapping("/permissions")
+    public Map<String, Boolean> getPermissions(
+            @RequestParam(required = false) String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        return metadataService.checkPermissions(accessKey, secretKey, region);
+    }
+
     @PostMapping("/fix-ssh")
     public String fixSsh(
             @RequestParam String instanceId,
@@ -101,5 +109,34 @@ public class AwsMetadataController {
             @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
         metadataService.deleteS3Bucket(bucketName, region, accessKey, secretKey);
         return "Bucket " + bucketName + " deleted successfully";
+    }
+
+    @DeleteMapping("/rds-instance")
+    public String deleteRDS(
+            @RequestParam String dbId,
+            @RequestParam String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        metadataService.deleteRDSInstance(dbId, region, accessKey, secretKey);
+        return "RDS Instance " + dbId + " deleted successfully";
+    }
+
+    @DeleteMapping("/lambda-function")
+    public String deleteLambda(
+            @RequestParam String functionName,
+            @RequestParam String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        metadataService.deleteLambdaFunction(functionName, region, accessKey, secretKey);
+        return "Lambda Function " + functionName + " deleted successfully";
+    }
+
+    @DeleteMapping("/iam-user")
+    public String deleteIAM(
+            @RequestParam String userName,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        metadataService.deleteIAMUser(userName, accessKey, secretKey);
+        return "IAM User " + userName + " deleted successfully";
     }
 }

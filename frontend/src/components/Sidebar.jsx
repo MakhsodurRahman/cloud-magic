@@ -9,6 +9,7 @@ const TOP_NAV = [
   { id: 'INFRASTRUCTURE', label: 'Infrastructure', icon: <Layers size={16} /> },
   { id: 'Software', label: 'Software Manager', icon: <Cpu size={16} /> },
   { id: 'EXPLORE', label: 'Explore Account', icon: <Compass size={16} /> },
+  { id: 'TERMINAL', label: 'Remote Console', icon: <Terminal size={16} /> },
 ];
 
 const Sidebar = ({
@@ -60,12 +61,19 @@ const Sidebar = ({
         {resourceStack.map((res, idx) => {
           const type = (res.serviceType || "").toUpperCase();
           const getIcon = () => {
-            // Priority 1: Service Type
-            if (type === 'S3' || res.bucketName) return <Database size={13} />;
-            if (type === 'EC2' || res.instanceName) return <Server size={13} />;
-            if (type === 'PIPELINE' || res.pipelineName) return <Terminal size={13} />;
-            if (type === 'ELASTIC_BEANSTALK' || res.appName) return <Cpu size={13} />;
+            if (type === 'S3') return <Database size={13} />;
+            if (type === 'EC2') return <Server size={13} />;
+            if (type === 'PIPELINE') return <Terminal size={13} />;
+            if (type === 'ELASTIC_BEANSTALK') return <Cpu size={13} />;
             return <Terminal size={13} />;
+          };
+
+          const getName = () => {
+            if (type === 'S3') return res.bucketName;
+            if (type === 'EC2') return res.instanceName;
+            if (type === 'PIPELINE') return res.pipelineName;
+            if (type === 'ELASTIC_BEANSTALK') return res.appName;
+            return res.name || res.instanceName || 'Resource';
           };
 
           return (
@@ -75,7 +83,7 @@ const Sidebar = ({
                   {getIcon()}
                 </span>
                 <span style={{ fontSize: '0.8rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)' }}>
-                  {res.bucketName || res.instanceName || res.pipelineName || res.appName || res.serviceType || 'Resource'}
+                  {getName()}
                 </span>
               </div>
               <Trash2
