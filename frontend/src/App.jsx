@@ -66,7 +66,9 @@ export default function App() {
     platform: 'nodejs', envType: 'SingleInstance',
     engine: 'mysql', engineVersion: '8.0.35', dbInstanceClass: 'db.t3.micro',
     allocatedStorage: 20, dbName: 'mydb', masterUsername: 'admin', masterPassword: 'password123',
-    publiclyAccessible: false
+    publiclyAccessible: false,
+    loadBalancerEnabled: false, autoScalingEnabled: false,
+    minSize: 1, maxSize: 3, desiredCapacity: 1, targetPort: 80
   });
   const [resourceStack, setResourceStack] = useState([]);
   const [permissions, setPermissions] = useState(null); // Deny-by-default until probe finishes

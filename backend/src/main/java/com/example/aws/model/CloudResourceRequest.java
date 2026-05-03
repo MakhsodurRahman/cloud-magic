@@ -52,6 +52,14 @@ public class CloudResourceRequest {
     private boolean storageAutoscaling;
     private int maxAllocatedStorage;
     private boolean autoGeneratePassword;
+    
+    // Scaling & Availability
+    private boolean loadBalancerEnabled;
+    private boolean autoScalingEnabled;
+    private int minSize;
+    private int maxSize;
+    private int desiredCapacity;
+    private int targetPort; // e.g. 80 or 8080
 
     // Getters and Setters
     public String getPipelineName() { return pipelineName; }
@@ -142,4 +150,17 @@ public class CloudResourceRequest {
     public void setMaxAllocatedStorage(int maxAllocatedStorage) { this.maxAllocatedStorage = maxAllocatedStorage; }
     public boolean isAutoGeneratePassword() { return autoGeneratePassword; }
     public void setAutoGeneratePassword(boolean autoGeneratePassword) { this.autoGeneratePassword = autoGeneratePassword; }
+
+    public boolean isLoadBalancerEnabled() { return loadBalancerEnabled; }
+    public void setLoadBalancerEnabled(boolean loadBalancerEnabled) { this.loadBalancerEnabled = loadBalancerEnabled; }
+    public boolean isAutoScalingEnabled() { return autoScalingEnabled; }
+    public void setAutoScalingEnabled(boolean autoScalingEnabled) { this.autoScalingEnabled = autoScalingEnabled; }
+    public int getMinSize() { return minSize; }
+    public void setMinSize(int minSize) { this.minSize = minSize; }
+    public int getMaxSize() { return maxSize; }
+    public void setMaxSize(int maxSize) { this.maxSize = maxSize; }
+    public int getDesiredCapacity() { return desiredCapacity; }
+    public void setDesiredCapacity(int desiredCapacity) { this.desiredCapacity = desiredCapacity; }
+    public int getTargetPort() { return targetPort; }
+    public void setTargetPort(int targetPort) { this.targetPort = targetPort; }
 }

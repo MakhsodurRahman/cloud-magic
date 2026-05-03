@@ -89,13 +89,19 @@ public class TerraformService {
     }
 
     private String getModuleName(CloudResourceRequest config) {
-        String type = config.getServiceType().toLowerCase();
-        String name = "resource";
+        String type = config.getServiceType() != null ? config.getServiceType().toLowerCase() : "resource";
+        String name = null;
+        
         if ("EC2".equalsIgnoreCase(config.getServiceType())) name = config.getInstanceName();
         else if ("S3".equalsIgnoreCase(config.getServiceType())) name = config.getBucketName();
         else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) name = config.getPipelineName();
         else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) name = config.getAppName();
         else if ("RDS".equalsIgnoreCase(config.getServiceType())) name = config.getDbName();
+        
+        // Fallback for null names
+        if (name == null || name.isBlank()) {
+            name = "resource-" + System.currentTimeMillis();
+        }
         
         String safeName = name.replaceAll("[^a-zA-Z0-9-]", "_").toLowerCase();
         return type + "_" + safeName;
@@ -147,16 +153,17 @@ public class TerraformService {
         }
         
         sb.append("  multi_az             = ").append(config.isMultiAz() ? "true" : "false").append("\n");
-        sb.append("  engine               = \"").append(config.getEngine() != null ? config.getEngine() : "mysql").append("\"\n");
+        String engine = config.getEngine() != null ? config.getEngine() : "mysql";
+        sb.append("  engine               = \"").append(engine).append("\"\n");
         // Omitted engine_version so AWS automatically selects the default stable version compatible with the instance class
         sb.append("  instance_class       = \"").append(config.getDbInstanceClass() != null ? config.getDbInstanceClass() : "db.t3.micro").append("\"\n");
         // For oracle and sqlserver, db_name is not allowed or has strict naming, handled simply here.
-        if (!"sqlserver-ex".equals(config.getEngine()) && !config.getEngine().startsWith("oracle")) {
+        if (!"sqlserver-ex".equals(engine) && !engine.startsWith("oracle")) {
             sb.append("  db_name              = \"").append(safeDbName).append("\"\n");
         }
         String username = config.getMasterUsername() != null && !config.getMasterUsername().trim().isEmpty() && !config.getMasterUsername().equals("null") ? config.getMasterUsername() : "dbadmin";
         // AWS PostgreSQL blocks 'admin' and 'postgres' as master usernames
-        if (("admin".equalsIgnoreCase(username) || "postgres".equalsIgnoreCase(username)) && config.getEngine() != null && config.getEngine().toLowerCase().contains("postgres")) {
+        if (("admin".equalsIgnoreCase(username) || "postgres".equalsIgnoreCase(username)) && engine.toLowerCase().contains("postgres")) {
             username = "dbadmin";
         }
         
@@ -319,10 +326,19 @@ public class TerraformService {
     }
 
     private void generateEc2Code(CloudResourceRequest config, StringBuilder sb) {
-        generateSecurityGroup(config, sb);
         String safeName = config.getInstanceName().replaceAll("\\s+", "_");
+        boolean isScaling = config.isAutoScalingEnabled();
+        boolean isLb = config.isLoadBalancerEnabled();
 
-        // Add IAM Instance Profile for SSM and S3
+        // 1. Data Sources for VPC/Subnets (Needed for ALB/ASG)
+        sb.append("data \"aws_vpc\" \"default_").append(safeName).append("\" { default = true }\n");
+        sb.append("data \"aws_subnets\" \"default_").append(safeName).append("\" {\n");
+        sb.append("  filter {\n    name   = \"vpc-id\"\n    values = [data.aws_vpc.default_").append(safeName).append(".id]\n  }\n}\n\n");
+
+        // 2. Security Group
+        generateSecurityGroup(config, sb);
+
+        // 3. IAM Role & Instance Profile
         sb.append("resource \"aws_iam_role\" \"ec2_role_").append(safeName).append("\" {\n");
         sb.append("  name = \"ec2-role-").append(safeName).append("\"\n");
         sb.append("  assume_role_policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = \"sts:AssumeRole\", Effect = \"Allow\", Principal = { Service = \"ec2.amazonaws.com\" } }] })\n}\n\n");
@@ -333,6 +349,7 @@ public class TerraformService {
         sb.append("resource \"aws_iam_instance_profile\" \"ec2_profile_").append(safeName).append("\" {\n");
         sb.append("  name = \"ec2-profile-").append(safeName).append("\"\n  role = aws_iam_role.ec2_role_").append(safeName).append(".name\n}\n\n");
 
+        // 4. AMI
         boolean hasAmi = config.getAmiId() != null && !config.getAmiId().trim().isEmpty() && !config.getAmiId().equals("null");
         if (!hasAmi) {
             sb.append("data \"aws_ami\" \"default_ubuntu_").append(safeName).append("\" {\n");
@@ -341,28 +358,109 @@ public class TerraformService {
             sb.append("  filter {\n    name   = \"virtualization-type\"\n    values = [\"hvm\"]\n  }\n");
             sb.append("  owners = [\"099720109477\"]\n}\n\n");
         }
+        String amiValue = hasAmi ? "\"" + config.getAmiId() + "\"" : "data.aws_ami.default_ubuntu_" + safeName + ".id";
 
-        sb.append("resource \"aws_instance\" \"").append(safeName).append("\" {\n");
-        sb.append("  ami           = ").append(hasAmi ? "\"" + config.getAmiId() + "\"" : "data.aws_ami.default_ubuntu_" + safeName + ".id").append("\n");
-        
-        String safeInstanceType = config.getInstanceType() != null && !config.getInstanceType().trim().isEmpty() && !config.getInstanceType().equals("null") ? config.getInstanceType() : "t3.micro";
-        sb.append("  instance_type = \"").append(safeInstanceType).append("\"\n");
-        sb.append("  key_name      = \"").append(config.getKeyPairName() != null && !config.getKeyPairName().equals("null") ? config.getKeyPairName() : "").append("\"\n");
-        sb.append("  iam_instance_profile = aws_iam_instance_profile.ec2_profile_").append(safeName).append(".name\n");
-        sb.append("  vpc_security_group_ids = [aws_security_group.magic_sg_").append(safeName).append(".id]\n\n");
-        
-        if (config.getSelectedSoftware() != null && !config.getSelectedSoftware().isEmpty()) {
-            sb.append("  user_data = <<-EOF\n");
-            sb.append("              #!/bin/bash\n");
-            sb.append("              sudo apt-get update -y\n");
-            for (String sw : config.getSelectedSoftware()) {
-                sb.append(getSoftwareScript(sw));
-            }
-            sb.append("              EOF\n\n");
+        // 5. Load Balancer (ALB) Setup
+        if (isLb) {
+            generateLoadBalancerCode(config, safeName, sb);
         }
 
-        sb.append("  root_block_device {\n    volume_size = ").append(config.getEbsVolumeSize()).append("\n  }\n\n");
-        sb.append("  tags = {\n    Name = \"").append(config.getInstanceName()).append("\"\n  }\n}\n\n");
+        // 6. Compute Layer (Instance OR ASG)
+        if (isScaling) {
+            // ASG Mode
+            sb.append("resource \"aws_launch_template\" \"").append(safeName).append("\" {\n");
+            sb.append("  name_prefix   = \"").append(safeName).append("-lt\"\n");
+            sb.append("  image_id      = ").append(amiValue).append("\n");
+            sb.append("  instance_type = \"").append(config.getInstanceType() != null ? config.getInstanceType() : "t3.micro").append("\"\n");
+            sb.append("  key_name      = \"").append(config.getKeyPairName() != null ? config.getKeyPairName() : "").append("\"\n\n");
+            sb.append("  network_interfaces {\n");
+            sb.append("    associate_public_ip_address = true\n");
+            sb.append("    security_groups             = [aws_security_group.magic_sg_").append(safeName).append(".id]\n");
+            sb.append("  }\n\n");
+            sb.append("  iam_instance_profile {\n    name = aws_iam_instance_profile.ec2_profile_").append(safeName).append(".name\n  }\n\n");
+            
+            if (config.getSelectedSoftware() != null && !config.getSelectedSoftware().isEmpty()) {
+                sb.append("  user_data = base64encode(<<-EOF\n");
+                sb.append("              #!/bin/bash\n");
+                sb.append("              sudo apt-get update -y\n");
+                for (String sw : config.getSelectedSoftware()) sb.append(getSoftwareScript(sw));
+                sb.append("              EOF\n  )\n");
+            }
+            sb.append("}\n\n");
+
+            sb.append("resource \"aws_autoscaling_group\" \"").append(safeName).append("\" {\n");
+            sb.append("  name                = \"").append(safeName).append("-asg\"\n");
+            sb.append("  min_size            = ").append(config.getMinSize() > 0 ? config.getMinSize() : 1).append("\n");
+            sb.append("  max_size            = ").append(config.getMaxSize() > 0 ? config.getMaxSize() : 3).append("\n");
+            sb.append("  desired_capacity    = ").append(config.getDesiredCapacity() > 0 ? config.getDesiredCapacity() : 1).append("\n");
+            sb.append("  vpc_zone_identifier = data.aws_subnets.default_").append(safeName).append(".ids\n\n");
+            sb.append("  launch_template {\n");
+            sb.append("    id      = aws_launch_template.").append(safeName).append(".id\n");
+            sb.append("    version = \"$Latest\"\n");
+            sb.append("  }\n");
+            
+            if (isLb) {
+                sb.append("  target_group_arns = [aws_lb_target_group.tg_").append(safeName).append(".arn]\n");
+            }
+            sb.append("}\n\n");
+        } else {
+            // Simple Instance Mode
+            sb.append("resource \"aws_instance\" \"").append(safeName).append("\" {\n");
+            sb.append("  ami           = ").append(amiValue).append("\n");
+            sb.append("  instance_type = \"").append(config.getInstanceType() != null ? config.getInstanceType() : "t3.micro").append("\"\n");
+            sb.append("  key_name      = \"").append(config.getKeyPairName() != null ? config.getKeyPairName() : "").append("\"\n");
+            sb.append("  iam_instance_profile = aws_iam_instance_profile.ec2_profile_").append(safeName).append(".name\n");
+            sb.append("  vpc_security_group_ids = [aws_security_group.magic_sg_").append(safeName).append(".id]\n\n");
+
+            if (config.getSelectedSoftware() != null && !config.getSelectedSoftware().isEmpty()) {
+                sb.append("  user_data = <<-EOF\n");
+                sb.append("              #!/bin/bash\n");
+                sb.append("              sudo apt-get update -y\n");
+                for (String sw : config.getSelectedSoftware()) sb.append(getSoftwareScript(sw));
+                sb.append("              EOF\n\n");
+            }
+            sb.append("  root_block_device {\n    volume_size = ").append(config.getEbsVolumeSize()).append("\n  }\n");
+            sb.append("  tags = { Name = \"").append(config.getInstanceName()).append("\" }\n");
+            sb.append("}\n\n");
+        }
+    }
+
+    private void generateLoadBalancerCode(CloudResourceRequest config, String safeName, StringBuilder sb) {
+        int port = config.getTargetPort() > 0 ? config.getTargetPort() : 80;
+
+        sb.append("resource \"aws_lb\" \"lb_").append(safeName).append("\" {\n");
+        sb.append("  name               = \"lb-").append(safeName).append("\"\n");
+        sb.append("  internal           = false\n");
+        sb.append("  load_balancer_type = \"application\"\n");
+        sb.append("  security_groups    = [aws_security_group.magic_sg_").append(safeName).append(".id]\n");
+        sb.append("  subnets            = data.aws_subnets.default_").append(safeName).append(".ids\n");
+        sb.append("}\n\n");
+
+        sb.append("resource \"aws_lb_target_group\" \"tg_").append(safeName).append("\" {\n");
+        sb.append("  name     = \"tg-").append(safeName).append("\"\n");
+        sb.append("  port     = ").append(port).append("\n");
+        sb.append("  protocol = \"HTTP\"\n");
+        sb.append("  vpc_id   = data.aws_vpc.default_").append(safeName).append(".id\n");
+        sb.append("  health_check {\n    path = \"/\"\n    port = ").append(port).append("\n  }\n");
+        sb.append("}\n\n");
+
+        sb.append("resource \"aws_lb_listener\" \"listener_").append(safeName).append("\" {\n");
+        sb.append("  load_balancer_arn = aws_lb.lb_").append(safeName).append(".arn\n");
+        sb.append("  port              = \"80\"\n");
+        sb.append("  protocol          = \"HTTP\"\n");
+        sb.append("  default_action {\n");
+        sb.append("    type             = \"forward\"\n");
+        sb.append("    target_group_arn = aws_lb_target_group.tg_").append(safeName).append(".arn\n");
+        sb.append("  }\n");
+        sb.append("}\n\n");
+        
+        if (!config.isAutoScalingEnabled()) {
+            sb.append("resource \"aws_lb_target_group_attachment\" \"attachment_").append(safeName).append("\" {\n");
+            sb.append("  target_group_arn = aws_lb_target_group.tg_").append(safeName).append(".arn\n");
+            sb.append("  target_id        = aws_instance.").append(safeName).append(".id\n");
+            sb.append("  port             = ").append(port).append("\n");
+            sb.append("}\n\n");
+        }
     }
 
     private String getSoftwareScript(String software) {
