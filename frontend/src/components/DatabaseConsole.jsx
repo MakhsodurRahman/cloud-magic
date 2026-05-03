@@ -1,8 +1,200 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Database, Play, AlertCircle, CheckCircle2, Clock, Terminal, Server, Key, Shield, 
   ChevronRight, ChevronDown, Loader2, Table2, Columns, Code, LayoutGrid, Zap, RefreshCw
 } from 'lucide-react';
+
+const SqlEditor = ({ query, setQuery, onExecute, databases, tables }) => {
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestionPos, setSuggestionPos] = useState({ top: 0, left: 0 });
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const textareaRef = useRef(null);
+  const highlightRef = useRef(null);
+
+  const allTables = useMemo(() => {
+    const list = [];
+    Object.values(tables).forEach(dbTables => {
+      dbTables.forEach(t => {
+         if (!list.includes(t.name)) list.push(t.name);
+      });
+    });
+    return list;
+  }, [tables]);
+
+  const SQL_KEYWORDS = [
+    'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 
+    'ALTER', 'DROP', 'INDEX', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'VALUES', 
+    'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER', 'ON', 'AS', 'AND', 'OR', 'NOT', 'NULL', 
+    'IS', 'ORDER', 'BY', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET', 'ASC', 'DESC', 'SERIAL', 
+    'VARCHAR', 'UNIQUE', 'INT', 'BOOLEAN', 'DATE', 'TIMESTAMP', 'TRUNCATE', 'VIEW'
+  ];
+
+  const highlightSql = (text) => {
+    let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    html = html.replace(/('[^']*')/g, '<span style="color: #a5d6ff;">$1</span>');
+    const keywordRegex = new RegExp(`\\b(${SQL_KEYWORDS.join('|')})\\b`, 'gi');
+    html = html.replace(keywordRegex, '<span style="color: #ff7b72; font-weight: 600;">$1</span>');
+    return html;
+  };
+
+  const getWordUnderCursor = (text, pos) => {
+    const before = text.substring(0, pos);
+    const match = before.match(/[a-zA-Z0-9_]+$/);
+    return match ? match[0] : '';
+  };
+
+  const updateSuggestionPos = (element, position) => {
+    const lines = element.value.substring(0, position).split('\n');
+    const currentLineIdx = lines.length - 1;
+    const currentLineLength = lines[currentLineIdx].length;
+    const top = (currentLineIdx * 24) + 24; 
+    const left = (currentLineLength * 9);
+    setSuggestionPos({ 
+      top: Math.min(top, element.clientHeight - 40), 
+      left: Math.min(left, element.clientWidth - 200) 
+    });
+  };
+
+  const handleInput = (e) => {
+    const val = e.target.value;
+    setQuery(val);
+    
+    const pos = e.target.selectionStart;
+    const word = getWordUnderCursor(val, pos);
+    
+    if (word.length >= 2) {
+      const lowerWord = word.toLowerCase();
+      const matchedKeywords = SQL_KEYWORDS.filter(k => k.toLowerCase().includes(lowerWord)).map(k => ({ text: k, type: 'Keyword' }));
+      const matchedDbs = databases.filter(db => db.toLowerCase().includes(lowerWord)).map(d => ({ text: d, type: 'Database' }));
+      const matchedTables = allTables.filter(t => t.toLowerCase().includes(lowerWord)).map(t => ({ text: t, type: 'Table' }));
+      
+      const newSuggestions = [...matchedKeywords, ...matchedDbs, ...matchedTables].slice(0, 8);
+      
+      if (newSuggestions.length > 0) {
+        setSuggestions(newSuggestions);
+        setActiveIdx(0);
+        setShowSuggestions(true);
+        updateSuggestionPos(e.target, pos);
+      } else {
+        setShowSuggestions(false);
+      }
+    } else {
+      setShowSuggestions(false);
+    }
+  };
+
+  const insertSuggestion = (suggestion) => {
+    const pos = textareaRef.current.selectionStart;
+    const word = getWordUnderCursor(query, pos);
+    const before = query.substring(0, pos - word.length);
+    const after = query.substring(pos);
+    
+    const newQuery = before + suggestion + after;
+    setQuery(newQuery);
+    setShowSuggestions(false);
+    
+    setTimeout(() => {
+      textareaRef.current.focus();
+      textareaRef.current.selectionStart = textareaRef.current.selectionEnd = before.length + suggestion.length;
+    }, 0);
+  };
+
+  const handleKeyDown = (e) => {
+    if (showSuggestions) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveIdx(prev => (prev + 1) % suggestions.length);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveIdx(prev => (prev - 1 + suggestions.length) % suggestions.length);
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        insertSuggestion(suggestions[activeIdx].text);
+      } else if (e.key === 'Escape') {
+        setShowSuggestions(false);
+      }
+    } else {
+      if (e.key === 'F5' || (e.ctrlKey && e.key === 'Enter')) {
+        e.preventDefault();
+        onExecute();
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = e.target.selectionStart;
+        const end = e.target.selectionEnd;
+        setQuery(query.substring(0, start) + '  ' + query.substring(end));
+        setTimeout(() => { e.target.selectionStart = e.target.selectionEnd = start + 2; }, 0);
+      }
+    }
+  };
+
+  return (
+    <div style={{ flex: 1, position: 'relative', background: '#0d1117', display: 'flex' }}>
+      <div style={{ padding: '20px 10px', background: '#0d1117', color: '#484f58', textAlign: 'right', userSelect: 'none', borderRight: '1px solid #21262d', fontFamily: "'Fira Code', 'JetBrains Mono', Consolas, monospace", fontSize: '15px', lineHeight: '24px' }}>
+        {query.split('\n').map((_, i) => <div key={i}>{i + 1}</div>)}
+      </div>
+      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        <div 
+          ref={highlightRef}
+          dangerouslySetInnerHTML={{ __html: highlightSql(query) + '<br/>' }}
+          style={{
+            position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+            padding: '20px', margin: 0, boxSizing: 'border-box',
+            fontFamily: "'Fira Code', 'JetBrains Mono', Consolas, monospace",
+            fontSize: '15px', lineHeight: '24px',
+            color: '#c9d1d9', whiteSpace: 'pre', overflowWrap: 'normal',
+            pointerEvents: 'none', zIndex: 1, overflow: 'hidden'
+          }}
+        />
+        <textarea 
+          ref={textareaRef}
+          value={query}
+          onChange={handleInput}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+          style={{ 
+            position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
+            padding: '20px', margin: 0, boxSizing: 'border-box',
+            background: 'transparent', color: 'transparent', caretColor: '#e2e8f0',
+            border: 'none', fontFamily: "'Fira Code', 'JetBrains Mono', Consolas, monospace", 
+            fontSize: '15px', lineHeight: '24px', resize: 'none', outline: 'none',
+            whiteSpace: 'pre', overflowWrap: 'normal', zIndex: 2, overflow: 'auto'
+          }}
+          onScroll={(e) => {
+            if (highlightRef.current) {
+              highlightRef.current.scrollTop = e.target.scrollTop;
+              highlightRef.current.scrollLeft = e.target.scrollLeft;
+            }
+          }}
+        />
+        {showSuggestions && (
+          <div style={{
+            position: 'absolute', top: `${suggestionPos.top}px`, left: `${suggestionPos.left + 20}px`,
+            background: '#161b22', border: '1px solid #30363d', borderRadius: '6px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)', zIndex: 10, minWidth: '200px', overflow: 'hidden'
+          }}>
+            {suggestions.map((s, idx) => (
+              <div 
+                key={idx}
+                onMouseDown={(e) => { e.preventDefault(); insertSuggestion(s.text); }}
+                style={{
+                  padding: '8px 12px', background: idx === activeIdx ? '#1f6feb' : 'transparent',
+                  color: idx === activeIdx ? '#ffffff' : '#c9d1d9', cursor: 'pointer',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem'
+                }}
+                onMouseEnter={() => setActiveIdx(idx)}
+              >
+                <span style={{ fontFamily: "Consolas, monospace" }}>{s.text}</span>
+                <span style={{ fontSize: '0.7rem', color: idx === activeIdx ? '#a5d6ff' : '#8b949e' }}>{s.type}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const DatabaseConsole = () => {
   const [isConnected, setIsConnected] = useState(false);
@@ -34,6 +226,64 @@ const DatabaseConsole = () => {
   const [expandedTables, setExpandedTables] = useState(new Set()); // "dbName.tableName"
   const [columns, setColumns] = useState({}); // { "dbName.tableName": [{name: "id", type: "int4"}] }
   const [explorerLoading, setExplorerLoading] = useState(null); // 'dbName' or 'dbName.tableName'
+
+  // Resizing State
+  const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [editorHeight, setEditorHeight] = useState(400); // pixels
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [isResizingEditor, setIsResizingEditor] = useState(false);
+  
+  const sidebarRef = useRef(null);
+  const editorRef = useRef(null);
+  const sidebarWidthRef = useRef(320);
+  const editorHeightRef = useRef(400);
+
+  useEffect(() => {
+    let rafId = null;
+    const handleMouseMove = (e) => {
+      if (rafId) cancelAnimationFrame(rafId);
+      
+      rafId = requestAnimationFrame(() => {
+        if (isResizingSidebar) {
+          const newWidth = Math.max(200, Math.min(600, e.clientX));
+          sidebarWidthRef.current = newWidth;
+          if (sidebarRef.current) {
+            sidebarRef.current.style.width = `${newWidth}px`;
+          }
+        }
+        if (isResizingEditor) {
+          const topToolbarHeight = 60;
+          const newHeight = Math.max(150, Math.min(window.innerHeight - 200, e.clientY - topToolbarHeight));
+          editorHeightRef.current = newHeight;
+          if (editorRef.current) {
+            editorRef.current.style.height = `${newHeight}px`;
+          }
+        }
+      });
+    };
+
+    const handleMouseUp = () => {
+      if (isResizingSidebar) setSidebarWidth(sidebarWidthRef.current);
+      if (isResizingEditor) setEditorHeight(editorHeightRef.current);
+      
+      setIsResizingSidebar(false);
+      setIsResizingEditor(false);
+      document.body.style.cursor = 'default';
+      document.body.style.userSelect = 'auto';
+    };
+
+    if (isResizingSidebar || isResizingEditor) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = isResizingSidebar ? 'col-resize' : 'row-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingSidebar, isResizingEditor]);
 
   const handleConnChange = (e) => {
     const { name, value } = e.target;
@@ -295,8 +545,16 @@ const DatabaseConsole = () => {
         .spinner { animation: spin 1s linear infinite; }
       `}</style>
       
+      {/* Resizing Overlay (Prevents event flickering) */}
+      {(isResizingSidebar || isResizingEditor) && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, cursor: isResizingSidebar ? 'col-resize' : 'row-resize' }} />
+      )}
+      
       {/* LEFT SIDEBAR: Object Explorer */}
-      <div style={{ width: '320px', background: '#161b22', borderRight: '1px solid #30363d', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      <div 
+        ref={sidebarRef}
+        style={{ width: `${sidebarWidth}px`, background: '#161b22', borderRight: '1px solid #30363d', display: 'flex', flexDirection: 'column', flexShrink: 0, position: 'relative', willChange: 'width' }}
+      >
         {/* Header */}
         <div style={{ padding: '16px', borderBottom: '1px solid #30363d', display: 'flex', alignItems: 'center', gap: '12px', background: 'linear-gradient(180deg, #1f242c 0%, #161b22 100%)' }}>
           <Server size={20} color="#38bdf8" />
@@ -424,6 +682,24 @@ const DatabaseConsole = () => {
         </div>
       </div>
 
+      {/* Sidebar Resizer (Vertical Bar) */}
+      <div 
+        onMouseDown={() => setIsResizingSidebar(true)}
+        style={{ 
+          width: '2px', 
+          cursor: 'col-resize', 
+          background: isResizingSidebar ? '#38bdf8' : '#30363d',
+          transition: 'all 0.2s',
+          zIndex: 10,
+          flexShrink: 0,
+          borderLeft: '2px solid transparent',
+          borderRight: '2px solid transparent',
+          backgroundClip: 'padding-box'
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.background = '#38bdf8'}
+        onMouseLeave={(e) => { if(!isResizingSidebar) e.currentTarget.style.background = '#30363d' }}
+      />
+
       {/* RIGHT SIDE: Main Workspace */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         
@@ -462,39 +738,34 @@ const DatabaseConsole = () => {
         </div>
 
         {/* Editor Area */}
-        <div style={{ flex: '0 0 45%', borderBottom: '1px solid #30363d', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ flex: 1, position: 'relative', background: '#0d1117', display: 'flex' }}>
-            {/* Line Numbers */}
-            <div style={{ padding: '20px 10px', background: '#0d1117', color: '#484f58', textAlign: 'right', userSelect: 'none', borderRight: '1px solid #21262d', fontFamily: "'Fira Code', 'JetBrains Mono', Consolas, monospace", fontSize: '15px', lineHeight: '1.6' }}>
-              {query.split('\n').map((_, i) => <div key={i}>{i + 1}</div>)}
-            </div>
-            {/* Textarea */}
-            <textarea 
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'F5' || (e.ctrlKey && e.key === 'Enter')) {
-                  e.preventDefault();
-                  handleExecute();
-                }
-                if (e.key === 'Tab') {
-                  e.preventDefault();
-                  const start = e.target.selectionStart;
-                  const end = e.target.selectionEnd;
-                  setQuery(query.substring(0, start) + '  ' + query.substring(end));
-                  setTimeout(() => { e.target.selectionStart = e.target.selectionEnd = start + 2; }, 0);
-                }
-              }}
-              spellCheck={false}
-              style={{ 
-                flex: 1, padding: '20px', background: 'transparent', color: '#c9d1d9', 
-                border: 'none', fontFamily: "'Fira Code', 'JetBrains Mono', Consolas, monospace", 
-                fontSize: '15px', lineHeight: '1.6', resize: 'none', outline: 'none',
-                whiteSpace: 'pre', overflowWrap: 'normal', overflowX: 'auto'
-              }}
-            />
-          </div>
+        <div 
+          ref={editorRef}
+          style={{ height: `${editorHeight}px`, borderBottom: '1px solid #30363d', position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0, willChange: 'height' }}
+        >
+          <SqlEditor 
+            query={query} 
+            setQuery={setQuery} 
+            onExecute={handleExecute} 
+            databases={databases} 
+            tables={tables} 
+          />
         </div>
+
+        {/* Editor Resizer */}
+        <div 
+          onMouseDown={() => setIsResizingEditor(true)}
+          style={{ 
+            height: '6px', 
+            cursor: 'row-resize', 
+            background: isResizingEditor ? '#38bdf8' : 'transparent',
+            transition: 'background 0.2s',
+            zIndex: 10,
+            marginTop: '-6px',
+            position: 'relative'
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.background = '#38bdf8'}
+          onMouseLeave={(e) => { if(!isResizingEditor) e.currentTarget.style.background = 'transparent' }}
+        />
 
         {/* Results Data Grid */}
         <div style={{ flex: 1, background: '#0f111a', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
