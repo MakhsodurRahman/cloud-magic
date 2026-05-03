@@ -233,6 +233,9 @@ const DatabaseConsole = () => {
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isResizingEditor, setIsResizingEditor] = useState(false);
   
+  // Connection Flow Step
+  const [connStep, setConnStep] = useState(1); // 1: Engine Select, 2: Form
+  
   const sidebarRef = useRef(null);
   const editorRef = useRef(null);
   const sidebarWidthRef = useRef(320);
@@ -442,37 +445,99 @@ const DatabaseConsole = () => {
     }
   };
 
-  // ---------------------------------------------------------------------------
   // RENDER CONNECTION SCREEN
   // ---------------------------------------------------------------------------
   if (!isConnected) {
+    const ENGINES = [
+      { id: 'postgresql', name: 'PostgreSQL', icon: <Database size={32} color="#38bdf8" />, color: '#38bdf8', desc: 'Powerful open source relational database' },
+      { id: 'mysql', name: 'MySQL', icon: <Zap size={32} color="#fbbf24" />, color: '#fbbf24', desc: 'Worlds most popular open source database' },
+      { id: 'sqlserver', name: 'SQL Server', icon: <Server size={32} color="#f87171" />, color: '#f87171', desc: 'Microsoft enterprise data platform' }
+    ];
+
+    const selectEngine = (engineId) => {
+      handleConnChange({ target: { name: 'engine', value: engineId } });
+      setConnStep(2);
+    };
+
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#0f111a', color: '#e2e8f0', fontFamily: "'Inter', sans-serif" }}>
         <style>{`
           @keyframes spin { 100% { transform: rotate(360deg); } }
           .spinner { animation: spin 1s linear infinite; }
+          .engine-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; }
+          .engine-card:hover { transform: translateY(-8px); border-color: var(--hover-color) !important; background: rgba(255,255,255,0.03) !important; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }
         `}</style>
-        <div style={{ width: '450px', background: '#161b22', border: '1px solid #30363d', borderRadius: '12px', boxShadow: '0 20px 40px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
-          
-          {/* Header */}
-          <div style={{ padding: '24px', borderBottom: '1px solid #30363d', background: 'linear-gradient(180deg, #1f242c 0%, #161b22 100%)', textAlign: 'center' }}>
-            <div style={{ display: 'inline-flex', padding: '12px', background: 'rgba(56, 189, 248, 0.1)', borderRadius: '12px', marginBottom: '16px' }}>
-              <Database size={32} color="#38bdf8" />
-            </div>
-            <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: '0 0 8px 0', color: '#f8fafc' }}>Connect to Database</h1>
-            <p style={{ margin: 0, fontSize: '0.9rem', color: '#8b949e' }}>CloudMagic Studio - Database Explorer</p>
-          </div>
 
-          {/* Form */}
-          <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase' }}>Database Engine</label>
-              <select name="engine" value={conn.engine} onChange={handleConnChange} style={{ width: '100%', padding: '10px 12px', background: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#e2e8f0', fontSize: '0.9rem', outline: 'none' }}>
-                <option value="postgresql">PostgreSQL</option>
-                <option value="mysql">MySQL</option>
-                <option value="sqlserver">SQL Server</option>
-              </select>
+        {connStep === 1 ? (
+          <div style={{ width: '800px', textAlign: 'center' }}>
+            <div style={{ marginBottom: '40px' }}>
+              <div style={{ display: 'inline-flex', padding: '16px', background: 'rgba(56, 189, 248, 0.1)', borderRadius: '20px', marginBottom: '24px' }}>
+                <Database size={48} color="#38bdf8" />
+              </div>
+              <h1 style={{ fontSize: '2.5rem', fontWeight: 800, margin: '0 0 12px 0', letterSpacing: '-1px' }}>Welcome to <span style={{ color: '#38bdf8' }}>CloudMagic Studio</span></h1>
+              <p style={{ fontSize: '1.1rem', color: '#94a3b8', maxWidth: '600px', margin: '0 auto' }}>Select a database engine to start managing your data with a premium explorer experience.</p>
             </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '24px' }}>
+              {ENGINES.map(engine => (
+                <div 
+                  key={engine.id}
+                  className="engine-card"
+                  onClick={() => selectEngine(engine.id)}
+                  style={{ 
+                    '--hover-color': engine.color,
+                    background: '#161b22', 
+                    border: '1px solid #30363d', 
+                    borderRadius: '16px', 
+                    padding: '32px 24px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '20px'
+                  }}
+                >
+                  <div style={{ padding: '20px', background: 'rgba(255,255,255,0.03)', borderRadius: '50%', border: `1px solid ${engine.color}22` }}>
+                    {engine.icon}
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700, margin: '0 0 8px 0' }}>{engine.name}</h3>
+                    <p style={{ fontSize: '0.85rem', color: '#8b949e', lineHeight: '1.5' }}>{engine.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={{ width: '450px', background: '#161b22', border: '1px solid #30363d', borderRadius: '12px', boxShadow: '0 20px 40px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
+            {/* Header */}
+            <div style={{ padding: '20px 24px', borderBottom: '1px solid #30363d', background: 'linear-gradient(180deg, #1f242c 0%, #161b22 100%)', display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <button 
+                onClick={() => setConnStep(1)}
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #30363d', borderRadius: '8px', color: '#94a3b8', padding: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'all 0.2s' }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+              >
+                <ChevronRight size={20} style={{ transform: 'rotate(180deg)' }} />
+              </button>
+              <div style={{ flex: 1 }}>
+                <h1 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0, color: '#f8fafc' }}>{ENGINES.find(e => e.id === conn.engine)?.name} Settings</h1>
+                <p style={{ margin: 0, fontSize: '0.75rem', color: '#8b949e' }}>Enter your server credentials</p>
+              </div>
+              <div style={{ padding: '8px', background: 'rgba(255,255,255,0.03)', borderRadius: '50%' }}>
+                {ENGINES.find(e => e.id === conn.engine)?.icon}
+              </div>
+            </div>
+
+            {/* Form */}
+            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'none' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase' }}>Database Engine</label>
+                <select name="engine" value={conn.engine} onChange={handleConnChange} style={{ width: '100%', padding: '10px 12px', background: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#e2e8f0', fontSize: '0.9rem', outline: 'none' }}>
+                  <option value="postgresql">PostgreSQL</option>
+                  <option value="mysql">MySQL</option>
+                  <option value="sqlserver">SQL Server</option>
+                </select>
+              </div>
 
             <div>
               <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase' }}>Host</label>
@@ -530,7 +595,8 @@ const DatabaseConsole = () => {
               {connecting ? <Loader2 size={16} className="spinner" /> : <CheckCircle2 size={16} />} Connect
             </button>
           </div>
-        </div>
+          </div>
+        )}
       </div>
     );
   }
