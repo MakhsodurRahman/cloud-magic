@@ -1,5 +1,6 @@
 package com.example.aws.controller;
 import com.example.aws.service.AwsMetadataService;
+import com.example.aws.service.CostEstimationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -12,6 +13,26 @@ public class AwsMetadataController {
 
     @Autowired
     private AwsMetadataService metadataService;
+
+    @Autowired
+    private CostEstimationService costService;
+
+    @PostMapping("/estimate-cost")
+    public Map<String, Object> getCostEstimate(
+            @RequestBody com.example.aws.model.CloudResourceRequest request,
+            @RequestParam(required = false) String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        return costService.estimateMonthlyCost(request, accessKey, secretKey, region);
+    }
+
+    @GetMapping("/rds-engines")
+    public List<Map<String, String>> getRdsEngines(
+            @RequestParam(required = false) String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        return metadataService.getRdsEngines(region, accessKey, secretKey);
+    }
 
     @GetMapping("/permissions")
     public Map<String, Boolean> getPermissions(

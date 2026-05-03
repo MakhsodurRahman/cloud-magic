@@ -9,6 +9,8 @@ import EC2Config from './EC2Config';
 import S3Config from './S3Config';
 import PipelineConfig from './PipelineConfig';
 import BeanstalkConfig from './BeanstalkConfig';
+import RdsConfig from './RdsConfig';
+import CostBadge from './CostBadge';
 
 /* ─── Service catalogue ──────────────────────────────────────────────────── */
 const SERVICES = [
@@ -48,10 +50,19 @@ const SERVICES = [
     bg: 'rgba(191,90,242,0.12)',
     badge: 'PaaS',
   },
+  {
+    id: 'RDS',
+    label: 'Amazon RDS',
+    desc: 'Deploy managed relational databases with automated backups and patching.',
+    icon: <Database size={28} />,
+    color: '#FF375F',
+    bg: 'rgba(255,55,95,0.12)',
+    badge: 'Database',
+  },
 ];
 
-const SERVICE_ICON = { EC2: <Server size={16} />, S3: <Database size={16} />, PIPELINE: <GitBranch size={16} />, ELASTIC_BEANSTALK: <Globe size={16} /> };
-const SERVICE_LABEL = { EC2: 'EC2', S3: 'S3', PIPELINE: 'CI/CD', ELASTIC_BEANSTALK: 'Beanstalk' };
+const SERVICE_ICON = { EC2: <Server size={16} />, S3: <Database size={16} />, PIPELINE: <GitBranch size={16} />, ELASTIC_BEANSTALK: <Globe size={16} />, RDS: <Database size={16} /> };
+const SERVICE_LABEL = { EC2: 'EC2', S3: 'S3', PIPELINE: 'CI/CD', ELASTIC_BEANSTALK: 'Beanstalk', RDS: 'RDS' };
 
 /* ─── Component ──────────────────────────────────────────────────────────── */
 const InfrastructureHub = ({
@@ -64,7 +75,8 @@ const InfrastructureHub = ({
   output, isLogMax, setIsLogMax, setOutput,
   selectedService, setSelectedService,
   editStackItem,
-  permissions = { EC2: true, S3: true, PIPELINE: true, ELASTIC_BEANSTALK: true },
+  permissions = { EC2: true, S3: true, PIPELINE: true, ELASTIC_BEANSTALK: true, RDS: true },
+  onRefreshStack,
 }) => {
   const svc = SERVICES.find(s => s.id === selectedService);
 
@@ -74,6 +86,7 @@ const InfrastructureHub = ({
     if (selectedService === 'S3') return <S3Config {...p} />;
     if (selectedService === 'PIPELINE') return <PipelineConfig {...p} runningInstances={runningInstances} region={region} />;
     if (selectedService === 'ELASTIC_BEANSTALK') return <BeanstalkConfig {...p} />;
+    if (selectedService === 'RDS') return <RdsConfig {...p} region={region} />;
   };
 
   return (
@@ -161,6 +174,13 @@ const InfrastructureHub = ({
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
                 <HardDrive size={16} color="var(--accent)" />
                 <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Deployment Stack</span>
+                <button 
+                  onClick={onRefreshStack}
+                  title="Sync with Disk"
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px', opacity: 0.8 }}
+                >
+                  <Zap size={14} style={{ transform: 'rotate(20deg)' }} />
+                </button>
                 <span style={{ marginLeft: 'auto', background: 'var(--accent-glow)', color: 'var(--accent)', fontSize: '0.72rem', fontWeight: 800, padding: '2px 8px', borderRadius: '20px' }}>
                   {resourceStack.length} resource{resourceStack.length > 1 ? 's' : ''}
                 </span>
@@ -188,9 +208,9 @@ const InfrastructureHub = ({
                       </button>
                       <Trash2
                         size={14}
-                        onClick={() => removeFromStack(res.id)}
+                        onClick={() => removeFromStack(res)}
                         style={{ cursor: 'pointer', color: 'var(--error)', padding: '4px' }}
-                        title="Remove from Stack (Will destroy on next deploy)"
+                        title="Remove from Stack (Physically deletes module folder)"
                       />
                     </div>
                   </div>
@@ -228,7 +248,8 @@ const InfrastructureHub = ({
 
       ) : (
         /* ── Config form for selected service ── */
-        <div className="animate-fade" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div className="animate-fade" style={{ display: 'flex', flexDirection: 'column', gap: '20px', position: 'relative' }}>
+          <CostBadge formData={formData} serviceType={selectedService} />
           {/* Back button */}
           <button
             onClick={() => setSelectedService(null)}

@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Box, Cpu, Compass, Cloud, Sun, Moon,
   Trash2, ChevronRight, Layers, Terminal,
-  Database, Server
+  Database, Server, Calculator
 } from 'lucide-react';
 
 const TOP_NAV = [
@@ -10,6 +10,8 @@ const TOP_NAV = [
   { id: 'Software', label: 'Software Manager', icon: <Cpu size={16} /> },
   { id: 'EXPLORE', label: 'Explore Account', icon: <Compass size={16} /> },
   { id: 'TERMINAL', label: 'Remote Console', icon: <Terminal size={16} /> },
+  { id: 'DB_CONSOLE', label: 'SQL Console', icon: <Database size={16} /> },
+  { id: 'COST', label: 'Cost Calculator', icon: <Calculator size={16} /> },
 ];
 
 const Sidebar = ({
@@ -88,7 +90,7 @@ const Sidebar = ({
               </div>
               <Trash2
                 size={13}
-                onClick={(e) => { e.stopPropagation(); removeFromStack(res.id); }}
+                onClick={(e) => { e.stopPropagation(); removeFromStack(res); }}
                 style={{ cursor: 'pointer', color: 'var(--error)', flexShrink: 0, marginLeft: '6px', opacity: 0.6 }}
               />
             </div>

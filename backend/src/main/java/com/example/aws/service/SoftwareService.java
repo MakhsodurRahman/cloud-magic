@@ -14,37 +14,56 @@ public class SoftwareService {
 
     public String installSoftware(String host, String user, String password, String keyName, List<String> softwareList) {
         StringBuilder output = new StringBuilder();
+        String[] possibleUsers = { user, "ubuntu", "ec2-user", "admin" };
         Session session = null;
-        try {
-            JSch jsch = new JSch();
-            
-            if (keyName != null && !keyName.isEmpty()) {
-                Path vaultKey = Paths.get(VAULT_DIR, keyName + ".pem");
-                Path legacyKey = Paths.get(TERRAFORM_DIR, keyName + ".pem");
-                
-                if (Files.exists(vaultKey)) {
-                    jsch.addIdentity(vaultKey.toString());
-                    output.append("Using Vaulted Key: ").append(vaultKey).append("\n");
-                } else if (Files.exists(legacyKey)) {
-                    jsch.addIdentity(legacyKey.toString());
-                    output.append("Using Legacy Key: ").append(legacyKey).append("\n");
-                } else {
-                    output.append("Warning: Private key '").append(keyName).append("' not found in vault. Falling back to password.\n");
+        
+        for (String attemptUser : possibleUsers) {
+            if (attemptUser == null || attemptUser.isEmpty()) continue;
+            try {
+                JSch jsch = new JSch();
+                if (keyName != null && !keyName.isEmpty()) {
+                    Path vaultKey = Paths.get(VAULT_DIR, keyName + ".pem");
+                    Path legacyKey = Paths.get(TERRAFORM_DIR, keyName + ".pem");
+                    if (Files.exists(vaultKey)) {
+                        jsch.addIdentity(vaultKey.toString());
+                        output.append("Using Vaulted Key: ").append(vaultKey).append("\n");
+                    } else if (Files.exists(legacyKey)) {
+                        jsch.addIdentity(legacyKey.toString());
+                        output.append("Using Legacy Key: ").append(legacyKey).append("\n");
+                    } else {
+                        output.append("Warning: Private key '").append(keyName).append("' not found in vault. Falling back to password.\n");
+                    }
                 }
-            }
 
-            session = jsch.getSession(user, host, 22);
-            if (password != null && !password.isEmpty()) {
-                session.setPassword(password);
-            }
+                session = jsch.getSession(attemptUser, host, 22);
+                if (password != null && !password.isEmpty()) {
+                    session.setPassword(password);
+                }
 
-            Properties config = new Properties();
-            config.put("StrictHostKeyChecking", "no");
-            session.setConfig(config);
-            
-            output.append("Connecting to ").append(host).append("...\n");
-            session.connect(30000);
-            output.append("Connected successfully!\n");
+                Properties config = new Properties();
+                config.put("StrictHostKeyChecking", "no");
+                session.setConfig(config);
+                
+                output.append("Connecting to ").append(host).append(" as ").append(attemptUser).append("...\n");
+                session.connect(15000);
+                output.append("Connected successfully as ").append(attemptUser).append("!\n");
+                
+                break; 
+            } catch (Exception e) {
+                if (e.getMessage().contains("Auth fail")) {
+                    output.append("Auth failed for ").append(attemptUser).append(", trying next...\n");
+                    continue;
+                }
+                output.append("\n❌ SSH Error: ").append(e.getMessage());
+                return output.toString();
+            }
+        }
+
+        if (session == null || !session.isConnected()) {
+            return output.append("\n❌ Failed to connect with all possible usernames.").toString();
+        }
+
+        try {
 
             for (String software : softwareList) {
                 output.append("\n[Stage] Installing ").append(software).append("...\n");

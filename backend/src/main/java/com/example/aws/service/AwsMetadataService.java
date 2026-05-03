@@ -2,9 +2,22 @@ package com.example.aws.service;
 
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.services.codepipeline.AWSCodePipeline;
+import com.amazonaws.services.codepipeline.AWSCodePipelineClientBuilder;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2ClientBuilder;
 import com.amazonaws.services.ec2.model.*;
+import com.amazonaws.services.elasticbeanstalk.AWSElasticBeanstalk;
+import com.amazonaws.services.elasticbeanstalk.AWSElasticBeanstalkClientBuilder;
+import com.amazonaws.services.rds.AmazonRDS;
+import com.amazonaws.services.rds.AmazonRDSClientBuilder;
+import com.amazonaws.services.rds.model.DescribeDBEngineVersionsRequest;
+import com.amazonaws.services.rds.model.DescribeDBInstancesRequest;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import org.springframework.stereotype.Service;
+import java.util.*;
+import java.util.stream.Collectors;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenService;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
 import com.amazonaws.services.securitytoken.model.GetCallerIdentityRequest;
@@ -72,6 +85,17 @@ public class AwsMetadataService {
             permissions.put("ELASTIC_BEANSTALK", false);
         }
 
+        // Probe RDS
+        try {
+            AmazonRDS rds = AmazonRDSClientBuilder.standard().withCredentials(credProvider).withRegion(r).build();
+            // Standard call without pagination limits which can sometimes cause SDK validation exceptions
+            rds.describeDBInstances(new DescribeDBInstancesRequest());
+            permissions.put("RDS", true);
+        } catch (Exception e) {
+            System.err.println("RDS Permission Probe Failed: " + e.getMessage());
+            permissions.put("RDS", false);
+        }
+
         return permissions;
     }
 
@@ -81,6 +105,37 @@ public class AwsMetadataService {
                 .withCredentials(new AWSStaticCredentialsProvider(credentials))
                 .withRegion(region != null ? region : "us-east-1")
                 .build();
+    }
+
+    public List<Map<String, String>> getRdsEngines(String region, String accessKey, String secretKey) {
+        try {
+            BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
+            AmazonRDS rds = AmazonRDSClientBuilder.standard()
+                    .withCredentials(new AWSStaticCredentialsProvider(credentials))
+                    .withRegion(region != null ? region : "us-east-1")
+                    .build();
+
+            // Fetch available RDS engines
+            return rds.describeDBEngineVersions(new DescribeDBEngineVersionsRequest()).getDBEngineVersions().stream()
+                    .map(engine -> {
+                        Map<String, String> map = new HashMap<>();
+                        map.put("engine", engine.getEngine());
+                        map.put("version", engine.getEngineVersion());
+                        map.put("description", engine.getDBEngineDescription());
+                        return map;
+                    })
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            System.err.println("Failed to fetch RDS engines: " + e.getMessage());
+            // Fallback hardcoded list for development/UI display
+            List<Map<String, String>> fallback = new ArrayList<>();
+            fallback.add(Map.of("engine", "mysql", "version", "8.0.35", "description", "MySQL Community Edition"));
+            fallback.add(Map.of("engine", "postgres", "version", "16.1", "description", "PostgreSQL"));
+            fallback.add(Map.of("engine", "mariadb", "version", "10.6.14", "description", "MariaDB"));
+            fallback.add(Map.of("engine", "sqlserver-ex", "version", "15.00.4312.2.v1", "description", "SQL Server Express Edition"));
+            fallback.add(Map.of("engine", "oracle-ee", "version", "19.0.0.0.ru-2023-10.rur-2023-10.r1", "description", "Oracle Enterprise Edition"));
+            return fallback;
+        }
     }
 
     public List<String> getRegions() {

@@ -10,6 +10,8 @@ import InfrastructureHub from './components/InfrastructureHub';
 import SoftwareManager from './components/SoftwareManager';
 import AccountExplorer from './components/AccountExplorer';
 import WebTerminal from './components/WebTerminal';
+import CostCalculator from './components/CostCalculator';
+import DatabaseConsole from './components/DatabaseConsole';
 
 /* ─── Provider definitions ─────────────────────────────────────────────────── */
 const PROVIDERS = [
@@ -62,6 +64,9 @@ export default function App() {
     targetInstanceId: '', buildCommands: 'npm test',
     appName: 'my-beanstalk-app', environmentName: 'my-beanstalk-env',
     platform: 'nodejs', envType: 'SingleInstance',
+    engine: 'mysql', engineVersion: '8.0.35', dbInstanceClass: 'db.t3.micro',
+    allocatedStorage: 20, dbName: 'mydb', masterUsername: 'admin', masterPassword: 'password123',
+    publiclyAccessible: false
   });
   const [resourceStack, setResourceStack] = useState([]);
   const [permissions, setPermissions] = useState(null); // Deny-by-default until probe finishes
@@ -654,7 +659,9 @@ export default function App() {
         </div>
 
         {/* Feature routing */}
-        {activeService === 'EXPLORE' ? (
+        {activeService === 'COST' ? (
+          <CostCalculator region={region} />
+        ) : activeService === 'EXPLORE' ? (
           <AccountExplorer
             region={region}
             explorationData={explorationData}
@@ -679,6 +686,8 @@ export default function App() {
             loading={loadingExplore}
             onRefresh={handleExplore}
           />
+        ) : activeService === 'DB_CONSOLE' ? (
+          <DatabaseConsole />
         ) : (
           <InfrastructureHub
             formData={formData} handleChange={handleChange}
@@ -692,6 +701,7 @@ export default function App() {
             selectedService={selectedService} setSelectedService={setSelectedService}
             editStackItem={editStackItem}
             permissions={permissions}
+            onRefreshStack={handleRefreshStack}
           />
         )}
       </main>

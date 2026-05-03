@@ -58,32 +58,51 @@ public class SshWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void connectSsh(WebSocketSession wsSession, String host, String user, String keyName) {
+        String[] possibleUsers = { user, "ubuntu", "ec2-user", "admin", "root" };
+        Session jschSession = null;
+        JSch jsch = new JSch();
+
         try {
-            JSch jsch = new JSch();
             if (keyName != null && !keyName.isEmpty()) {
-                Path vaultKey = Paths.get(VAULT_DIR, keyName + ".pem");
-                Path legacyKey = Paths.get(TERRAFORM_DIR, keyName + ".pem");
+                Path vaultKey = Paths.get(VAULT_DIR, keyName + ".pem").toAbsolutePath();
+                Path legacyKey = Paths.get(TERRAFORM_DIR, keyName + ".pem").toAbsolutePath();
                 if (Files.exists(vaultKey)) jsch.addIdentity(vaultKey.toString());
                 else if (Files.exists(legacyKey)) jsch.addIdentity(legacyKey.toString());
                 else {
-                    wsSession.sendMessage(new TextMessage("Error: Key not found.\r\n"));
+                    wsSession.sendMessage(new TextMessage("Error: Private key '" + keyName + "' not found.\r\n"));
                     wsSession.close();
                     return;
                 }
             }
 
-            Session jschSession = jsch.getSession(user, host, 22);
-            Properties config = new Properties();
-            config.put("StrictHostKeyChecking", "no");
-            jschSession.setConfig(config);
-            jschSession.connect(30000);
+            for (String attemptUser : possibleUsers) {
+                if (attemptUser == null || attemptUser.isEmpty()) continue;
+                try {
+                    jschSession = jsch.getSession(attemptUser, host, 22);
+                    Properties config = new Properties();
+                    config.put("StrictHostKeyChecking", "no");
+                    jschSession.setConfig(config);
+                    
+                    wsSession.sendMessage(new TextMessage("Trying connection as " + attemptUser + "...\r\n"));
+                    jschSession.connect(10000); // 10s timeout
+                    wsSession.sendMessage(new TextMessage("Authenticated as " + attemptUser + "!\r\n"));
+                    break;
+                } catch (Exception e) {
+                    if (e.getMessage().contains("Auth fail")) continue;
+                    throw e;
+                }
+            }
+
+            if (jschSession == null || !jschSession.isConnected()) {
+                wsSession.sendMessage(new TextMessage("SSH Connection Error: Authentication failed for all usernames.\r\n"));
+                wsSession.close();
+                return;
+            }
 
             ChannelShell channel = (ChannelShell) jschSession.openChannel("shell");
             channel.setPtyType("xterm");
-            
             InputStream in = channel.getInputStream();
             OutputStream out = channel.getOutputStream();
-
             channel.connect(3000);
 
             SshConnection conn = new SshConnection();
@@ -95,16 +114,13 @@ public class SshWebSocketHandler extends TextWebSocketHandler {
             byte[] buffer = new byte[1024];
             int i;
             while ((i = in.read(buffer)) != -1) {
-                if (wsSession.isOpen()) {
-                    wsSession.sendMessage(new TextMessage(new String(buffer, 0, i)));
-                } else {
-                    break;
-                }
+                if (wsSession.isOpen()) wsSession.sendMessage(new TextMessage(new String(buffer, 0, i)));
+                else break;
             }
         } catch (Exception e) {
             try {
                 if (wsSession.isOpen()) {
-                    wsSession.sendMessage(new TextMessage("SSH Connection Error: " + e.getMessage() + "\r\n"));
+                    wsSession.sendMessage(new TextMessage("SSH Error: " + e.getMessage() + "\r\n"));
                     wsSession.close();
                 }
             } catch (Exception ex) {}

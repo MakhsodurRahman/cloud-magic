@@ -34,6 +34,25 @@ public class CloudResourceRequest {
     private String platform;
     private String envType; // SingleInstance, LoadBalanced
 
+    // RDS Specific
+    private String engine;
+    private String engineVersion;
+    private String dbInstanceClass;
+    private int allocatedStorage;
+    private String dbName;
+    private String masterUsername;
+    private String masterPassword;
+    private boolean publiclyAccessible;
+    
+    // New Advanced RDS Fields
+    private String creationMethod; // Standard, Easy
+    private String rdsTemplate; // Production, DevTest, FreeTier
+    private String storageType; // gp2, gp3, io1
+    private boolean multiAz;
+    private boolean storageAutoscaling;
+    private int maxAllocatedStorage;
+    private boolean autoGeneratePassword;
+
     // Getters and Setters
     public String getPipelineName() { return pipelineName; }
     public void setPipelineName(String pipelineName) { this.pipelineName = pipelineName; }
@@ -91,4 +110,36 @@ public class CloudResourceRequest {
 
     public String getAcl() { return acl; }
     public void setAcl(String acl) { this.acl = acl; }
+
+    public String getEngine() { return engine; }
+    public void setEngine(String engine) { this.engine = engine; }
+    public String getEngineVersion() { return engineVersion; }
+    public void setEngineVersion(String engineVersion) { this.engineVersion = engineVersion; }
+    public String getDbInstanceClass() { return dbInstanceClass; }
+    public void setDbInstanceClass(String dbInstanceClass) { this.dbInstanceClass = dbInstanceClass; }
+    public int getAllocatedStorage() { return allocatedStorage; }
+    public void setAllocatedStorage(int allocatedStorage) { this.allocatedStorage = allocatedStorage; }
+    public String getDbName() { return dbName; }
+    public void setDbName(String dbName) { this.dbName = dbName; }
+    public String getMasterUsername() { return masterUsername; }
+    public void setMasterUsername(String masterUsername) { this.masterUsername = masterUsername; }
+    public String getMasterPassword() { return masterPassword; }
+    public void setMasterPassword(String masterPassword) { this.masterPassword = masterPassword; }
+    public boolean isPubliclyAccessible() { return publiclyAccessible; }
+    public void setPubliclyAccessible(boolean publiclyAccessible) { this.publiclyAccessible = publiclyAccessible; }
+
+    public String getCreationMethod() { return creationMethod; }
+    public void setCreationMethod(String creationMethod) { this.creationMethod = creationMethod; }
+    public String getRdsTemplate() { return rdsTemplate; }
+    public void setRdsTemplate(String rdsTemplate) { this.rdsTemplate = rdsTemplate; }
+    public String getStorageType() { return storageType; }
+    public void setStorageType(String storageType) { this.storageType = storageType; }
+    public boolean isMultiAz() { return multiAz; }
+    public void setMultiAz(boolean multiAz) { this.multiAz = multiAz; }
+    public boolean isStorageAutoscaling() { return storageAutoscaling; }
+    public void setStorageAutoscaling(boolean storageAutoscaling) { this.storageAutoscaling = storageAutoscaling; }
+    public int getMaxAllocatedStorage() { return maxAllocatedStorage; }
+    public void setMaxAllocatedStorage(int maxAllocatedStorage) { this.maxAllocatedStorage = maxAllocatedStorage; }
+    public boolean isAutoGeneratePassword() { return autoGeneratePassword; }
+    public void setAutoGeneratePassword(boolean autoGeneratePassword) { this.autoGeneratePassword = autoGeneratePassword; }
 }

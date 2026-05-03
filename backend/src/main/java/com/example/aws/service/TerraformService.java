@@ -83,6 +83,7 @@ public class TerraformService {
             else if ("S3".equalsIgnoreCase(config.getServiceType())) generateS3Code(config, sb);
             else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) generatePipelineCode(config, sb);
             else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) generateElasticBeanstalkCode(config, sb);
+            else if ("RDS".equalsIgnoreCase(config.getServiceType())) generateRdsCode(config, sb);
         }
         return sb.toString();
     }
@@ -94,9 +95,77 @@ public class TerraformService {
         else if ("S3".equalsIgnoreCase(config.getServiceType())) name = config.getBucketName();
         else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) name = config.getPipelineName();
         else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) name = config.getAppName();
+        else if ("RDS".equalsIgnoreCase(config.getServiceType())) name = config.getDbName();
         
         String safeName = name.replaceAll("[^a-zA-Z0-9-]", "_").toLowerCase();
         return type + "_" + safeName;
+    }
+
+    private int getDbPort(String engine) {
+        if (engine == null) return 3306;
+        String e = engine.toLowerCase();
+        if (e.contains("postgres")) return 5432;
+        if (e.contains("oracle")) return 1521;
+        if (e.contains("sqlserver")) return 1433;
+        return 3306;
+    }
+
+    private void generateRdsCode(CloudResourceRequest config, StringBuilder sb) {
+        String safeDbName = config.getDbName() != null ? config.getDbName().replaceAll("[^a-zA-Z0-9]", "").toLowerCase() : "mydb";
+        String instanceId = config.getDbName() != null ? config.getDbName().replaceAll("[^a-zA-Z0-9-]", "-").toLowerCase() : "my-rds-db";
+        
+        int port = getDbPort(config.getEngine());
+        sb.append("resource \"aws_security_group\" \"rds_sg_").append(instanceId).append("\" {\n");
+        sb.append("  name        = \"rds-sg-").append(instanceId).append("\"\n");
+        sb.append("  description = \"Allow database traffic for ").append(instanceId).append("\"\n\n");
+        sb.append("  ingress {\n");
+        sb.append("    from_port   = ").append(port).append("\n");
+        sb.append("    to_port     = ").append(port).append("\n");
+        sb.append("    protocol    = \"tcp\"\n");
+        sb.append("    cidr_blocks = [\"0.0.0.0/0\"]\n");
+        sb.append("  }\n\n");
+        sb.append("  egress {\n");
+        sb.append("    from_port   = 0\n");
+        sb.append("    to_port     = 0\n");
+        sb.append("    protocol    = \"-1\"\n");
+        sb.append("    cidr_blocks = [\"0.0.0.0/0\"]\n");
+        sb.append("  }\n");
+        sb.append("}\n\n");
+
+        sb.append("resource \"aws_db_instance\" \"").append(instanceId).append("\" {\n");
+        sb.append("  identifier           = \"").append(instanceId).append("\"\n");
+        sb.append("  allocated_storage    = ").append(config.getAllocatedStorage() > 0 ? config.getAllocatedStorage() : 20).append("\n");
+        
+        if (config.getStorageType() != null && !config.getStorageType().isEmpty()) {
+            sb.append("  storage_type         = \"").append(config.getStorageType()).append("\"\n");
+        } else {
+            sb.append("  storage_type         = \"gp2\"\n");
+        }
+        
+        if (config.isStorageAutoscaling() && config.getMaxAllocatedStorage() > config.getAllocatedStorage()) {
+            sb.append("  max_allocated_storage = ").append(config.getMaxAllocatedStorage()).append("\n");
+        }
+        
+        sb.append("  multi_az             = ").append(config.isMultiAz() ? "true" : "false").append("\n");
+        sb.append("  engine               = \"").append(config.getEngine() != null ? config.getEngine() : "mysql").append("\"\n");
+        // Omitted engine_version so AWS automatically selects the default stable version compatible with the instance class
+        sb.append("  instance_class       = \"").append(config.getDbInstanceClass() != null ? config.getDbInstanceClass() : "db.t3.micro").append("\"\n");
+        // For oracle and sqlserver, db_name is not allowed or has strict naming, handled simply here.
+        if (!"sqlserver-ex".equals(config.getEngine()) && !config.getEngine().startsWith("oracle")) {
+            sb.append("  db_name              = \"").append(safeDbName).append("\"\n");
+        }
+        String username = config.getMasterUsername() != null && !config.getMasterUsername().trim().isEmpty() && !config.getMasterUsername().equals("null") ? config.getMasterUsername() : "dbadmin";
+        // AWS PostgreSQL blocks 'admin' and 'postgres' as master usernames
+        if (("admin".equalsIgnoreCase(username) || "postgres".equalsIgnoreCase(username)) && config.getEngine() != null && config.getEngine().toLowerCase().contains("postgres")) {
+            username = "dbadmin";
+        }
+        
+        sb.append("  username             = \"").append(username).append("\"\n");
+        sb.append("  password             = \"").append(config.getMasterPassword() != null && !config.getMasterPassword().equals("null") ? config.getMasterPassword() : "password123").append("\"\n");
+        sb.append("  vpc_security_group_ids = [aws_security_group.rds_sg_").append(instanceId).append(".id]\n");
+        sb.append("  publicly_accessible  = ").append(config.isPubliclyAccessible() ? "true" : "false").append("\n");
+        sb.append("  skip_final_snapshot  = true\n"); // For dev environments, normally false for prod
+        sb.append("}\n\n");
     }
 
     private void generateElasticBeanstalkCode(CloudResourceRequest config, StringBuilder sb) {
@@ -264,10 +333,21 @@ public class TerraformService {
         sb.append("resource \"aws_iam_instance_profile\" \"ec2_profile_").append(safeName).append("\" {\n");
         sb.append("  name = \"ec2-profile-").append(safeName).append("\"\n  role = aws_iam_role.ec2_role_").append(safeName).append(".name\n}\n\n");
 
+        boolean hasAmi = config.getAmiId() != null && !config.getAmiId().trim().isEmpty() && !config.getAmiId().equals("null");
+        if (!hasAmi) {
+            sb.append("data \"aws_ami\" \"default_ubuntu_").append(safeName).append("\" {\n");
+            sb.append("  most_recent = true\n");
+            sb.append("  filter {\n    name   = \"name\"\n    values = [\"ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*\"]\n  }\n");
+            sb.append("  filter {\n    name   = \"virtualization-type\"\n    values = [\"hvm\"]\n  }\n");
+            sb.append("  owners = [\"099720109477\"]\n}\n\n");
+        }
+
         sb.append("resource \"aws_instance\" \"").append(safeName).append("\" {\n");
-        sb.append("  ami           = \"").append(config.getAmiId()).append("\"\n");
-        sb.append("  instance_type = \"").append(config.getInstanceType()).append("\"\n");
-        sb.append("  key_name      = \"").append(config.getKeyPairName()).append("\"\n");
+        sb.append("  ami           = ").append(hasAmi ? "\"" + config.getAmiId() + "\"" : "data.aws_ami.default_ubuntu_" + safeName + ".id").append("\n");
+        
+        String safeInstanceType = config.getInstanceType() != null && !config.getInstanceType().trim().isEmpty() && !config.getInstanceType().equals("null") ? config.getInstanceType() : "t3.micro";
+        sb.append("  instance_type = \"").append(safeInstanceType).append("\"\n");
+        sb.append("  key_name      = \"").append(config.getKeyPairName() != null && !config.getKeyPairName().equals("null") ? config.getKeyPairName() : "").append("\"\n");
         sb.append("  iam_instance_profile = aws_iam_instance_profile.ec2_profile_").append(safeName).append(".name\n");
         sb.append("  vpc_security_group_ids = [aws_security_group.magic_sg_").append(safeName).append(".id]\n\n");
         
