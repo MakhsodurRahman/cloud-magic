@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Database, Play, AlertCircle, CheckCircle2, Clock, Terminal, Server, Key, Shield, 
-  ChevronRight, ChevronDown, Loader2, Table2, Columns, Code, LayoutGrid, Zap 
+  ChevronRight, ChevronDown, Loader2, Table2, Columns, Code, LayoutGrid, Zap, RefreshCw
 } from 'lucide-react';
 
 const DatabaseConsole = () => {
   const [isConnected, setIsConnected] = useState(false);
+  const [activeTable, setActiveTable] = useState(null);
   
   // Connection State
   const [conn, setConn] = useState({
@@ -143,6 +144,8 @@ const DatabaseConsole = () => {
   };
 
   const previewTable = (dbName, tableName) => {
+    const key = `${dbName}.${tableName}`;
+    setActiveTable(key);
     let newQuery = `SELECT * FROM ${tableName} LIMIT 100;`;
     if (conn.engine === 'postgresql' && dbName !== conn.database) {
       // Postgres cross-db query isn't natively supported like this, but we'll try to just set the query
@@ -152,7 +155,7 @@ const DatabaseConsole = () => {
     setQuery(newQuery);
     setTimeout(() => {
       executeSQL(newQuery, dbName);
-    }, 100);
+    }, 10);
   };
 
   const handleExecute = () => {
@@ -164,13 +167,24 @@ const DatabaseConsole = () => {
     setLoading(true);
     setResult(null);
     try {
+      const dbToUse = targetDb || conn.database;
       const res = await fetch('http://localhost:8080/api/db-console/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...conn, database: targetDb || conn.database, query: sqlText })
+        body: JSON.stringify({ ...conn, database: dbToUse, query: sqlText })
       });
       const data = await res.json();
       setResult(data);
+
+      if (data.status === 'success' && expandedDbs.has(dbToUse)) {
+        const upperQuery = sqlText.toUpperCase();
+        if (upperQuery.includes('CREATE ') || upperQuery.includes('DROP ') || upperQuery.includes('ALTER ') || upperQuery.includes('TRUNCATE ')) {
+          const tbls = await fetchMetadata('tables', dbToUse);
+          if (tbls) {
+            setTables(prev => ({ ...prev, [dbToUse]: tbls }));
+          }
+        }
+      }
     } catch (err) {
       setResult({ status: 'error', message: 'Network error: Could not reach backend.' });
     } finally {
@@ -184,6 +198,10 @@ const DatabaseConsole = () => {
   if (!isConnected) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#0f111a', color: '#e2e8f0', fontFamily: "'Inter', sans-serif" }}>
+        <style>{`
+          @keyframes spin { 100% { transform: rotate(360deg); } }
+          .spinner { animation: spin 1s linear infinite; }
+        `}</style>
         <div style={{ width: '450px', background: '#161b22', border: '1px solid #30363d', borderRadius: '12px', boxShadow: '0 20px 40px rgba(0,0,0,0.4)', overflow: 'hidden' }}>
           
           {/* Header */}
@@ -272,6 +290,10 @@ const DatabaseConsole = () => {
   // ---------------------------------------------------------------------------
   return (
     <div style={{ display: 'flex', height: '100vh', background: '#0f111a', color: '#e2e8f0', fontFamily: "'Inter', sans-serif", overflow: 'hidden' }}>
+      <style>{`
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .spinner { animation: spin 1s linear infinite; }
+      `}</style>
       
       {/* LEFT SIDEBAR: Object Explorer */}
       <div style={{ width: '320px', background: '#161b22', borderRight: '1px solid #30363d', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
@@ -303,7 +325,7 @@ const DatabaseConsole = () => {
             <div key={db}>
               {/* Database Node */}
               <div 
-                onClick={() => toggleDb(db)}
+                onClick={() => { toggleDb(db); setConn(prev => ({...prev, database: db})); }}
                 style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 16px', cursor: 'pointer', userSelect: 'none', transition: 'background 0.1s', color: '#e2e8f0' }}
                 onMouseEnter={(e) => e.currentTarget.style.background = '#21262d'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
@@ -320,7 +342,22 @@ const DatabaseConsole = () => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 16px', color: '#8b949e' }}>
                     <ChevronDown size={14} />
                     <LayoutGrid size={14} />
-                    Tables
+                    <span style={{ flex: 1 }}>Tables</span>
+                    <RefreshCw 
+                      size={14} 
+                      style={{ cursor: 'pointer', transition: 'color 0.2s' }} 
+                      color="#8b949e"
+                      onMouseEnter={(e) => e.currentTarget.style.color = '#e2e8f0'}
+                      onMouseLeave={(e) => e.currentTarget.style.color = '#8b949e'}
+                      title="Refresh Tables"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        setExplorerLoading(db);
+                        const tbls = await fetchMetadata('tables', db);
+                        if (tbls) setTables(prev => ({ ...prev, [db]: tbls }));
+                        setExplorerLoading(null);
+                      }} 
+                    />
                   </div>
                   <div style={{ paddingLeft: '16px' }}>
                     {tables[db].length === 0 && <div style={{ padding: '4px 16px', color: '#8b949e', fontStyle: 'italic', fontSize: '0.8rem' }}>No tables found</div>}
@@ -331,20 +368,16 @@ const DatabaseConsole = () => {
                       return (
                         <div key={key}>
                           <div 
-                            onClick={() => toggleDb(key)} // To trigger double click action or context menu. We will use a dedicated click
-                            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 16px', cursor: 'pointer', userSelect: 'none', transition: 'background 0.1s' }}
-                            onMouseEnter={(e) => e.currentTarget.style.background = '#21262d'}
-                            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                            onClick={() => { toggleTable(db, tbl.name); previewTable(db, tbl.name); }}
+                            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 16px', cursor: 'pointer', userSelect: 'none', transition: 'background 0.1s', background: activeTable === key ? 'rgba(56, 189, 248, 0.15)' : 'transparent' }}
+                            onMouseEnter={(e) => { if(activeTable !== key) e.currentTarget.style.background = '#21262d'; }}
+                            onMouseLeave={(e) => { if(activeTable !== key) e.currentTarget.style.background = 'transparent'; }}
                           >
-                            <div onClick={(e) => { e.stopPropagation(); toggleTable(db, tbl.name); }} style={{ display: 'flex', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
                               {isExpanded ? <ChevronDown size={14} color="#8b949e" /> : <ChevronRight size={14} color="#8b949e" />}
                             </div>
                             <Table2 size={14} color="#10b981" />
-                            <span 
-                              onDoubleClick={() => previewTable(db, tbl.name)}
-                              title="Double click to preview 100 rows"
-                              style={{ flex: 1 }}
-                            >
+                            <span style={{ flex: 1, color: activeTable === key ? '#38bdf8' : '#e2e8f0', fontWeight: activeTable === key ? 600 : 400 }}>
                               {tbl.name}
                             </span>
                             {explorerLoading === key && <Loader2 size={12} className="spinner" />}
