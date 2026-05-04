@@ -22,6 +22,9 @@ public class TerraformService {
     @Autowired
     private ElasticBeanstalkService elasticBeanstalkService;
 
+    @Autowired
+    private PipelineService pipelineService;
+
     // Base workspace root — org-scoped sub-directories are created beneath this
     private static final String WORKDIR_ROOT = "terraform-workdir";
     private static final String VAULT_DIR    = "vault/keys";
@@ -85,7 +88,7 @@ public class TerraformService {
         if ("aws".equals(provider)) {
             if ("EC2".equalsIgnoreCase(config.getServiceType())) generateEc2Code(config, sb, stack);
             else if ("S3".equalsIgnoreCase(config.getServiceType())) generateS3Code(config, sb);
-            else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) generatePipelineCode(config, sb);
+            else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) sb.append(pipelineService.generatePipelineHcl(config));
             else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) sb.append(elasticBeanstalkService.generateHcl(config));
             else if ("RDS".equalsIgnoreCase(config.getServiceType())) generateRdsCode(config, sb, stack);
             else if ("VPC".equalsIgnoreCase(config.getServiceType())) generateVpcCode(config, sb);
@@ -596,9 +599,9 @@ public class TerraformService {
                        "              tar -xzf kafka_2.13-3.7.0.tgz\n" +
                        "              mv kafka_2.13-3.7.0 /home/ubuntu/kafka\n";
             case "utilities":
-                return "              sudo apt-get install -y git curl wget unzip build-essential\n";
+                return "              sudo apt-get install -y git curl wget unzip build-essential awscli\n";
             case "docker":
-                return "              sudo apt-get install -y ca-certificates curl gnupg lsb-release\n" +
+                return "              sudo apt-get install -y ca-certificates curl gnupg lsb-release unzip awscli\n" +
                        "              sudo mkdir -p /etc/apt/keyrings\n" +
                        "              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg\n" +
                        "              echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null\n" +

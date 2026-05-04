@@ -153,8 +153,10 @@ export default function App() {
   }, [region, cloudProvider, isConnected]);
 
   useEffect(() => {
-    if (activeService === 'Software' && isConnected) fetchInstances();
-  }, [activeService, isConnected]);
+    if ((activeService === 'Software' || selectedService === 'PIPELINE') && isConnected) {
+      fetchInstances();
+    }
+  }, [activeService, selectedService, isConnected, region]);
 
   useEffect(() => {
     if (activeService === 'EXPLORE' && isConnected) handleExplore();
@@ -269,6 +271,7 @@ export default function App() {
 
     const resourceData = {
       ...formData,
+      region,
       securityGroupPorts: ports,
       ebsVolumeSize: parseInt(formData.ebsVolumeSize) || 20,
       selectedSoftware: serviceType === 'EC2' ? [...formData.selectedSoftware] : [],

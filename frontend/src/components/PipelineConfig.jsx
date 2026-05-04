@@ -1,15 +1,12 @@
 import React from 'react';
 import { 
   GitBranch, 
-  Terminal, 
   Server, 
   Settings, 
   Zap, 
   Globe, 
-  ArrowRight,
-  ShieldCheck,
-  Cpu,
-  Layers
+  Layers,
+  Cpu
 } from 'lucide-react';
 
 const PipelineConfig = ({ formData, handleChange, runningInstances, region }) => {
@@ -30,6 +27,20 @@ const PipelineConfig = ({ formData, handleChange, runningInstances, region }) =>
 
         <div style={formGrid}>
           <div className="field-group">
+            <label style={labelStyle}>Pipeline Name</label>
+            <div style={inputWrapper}>
+              <Settings size={16} style={inputIcon} />
+              <input 
+                name="pipelineName" 
+                value={formData.pipelineName || ''} 
+                onChange={handleChange} 
+                placeholder="my-awesome-pipeline" 
+                style={modernInput}
+              />
+            </div>
+          </div>
+
+          <div className="field-group">
             <label style={labelStyle}>GitHub Repository ID</label>
             <div style={inputWrapper}>
               <Globe size={16} style={inputIcon} />
@@ -42,7 +53,9 @@ const PipelineConfig = ({ formData, handleChange, runningInstances, region }) =>
               />
             </div>
           </div>
+        </div>
 
+        <div style={{...formGrid, marginTop: '20px'}}>
           <div className="field-group">
             <label style={labelStyle}>Branch Name</label>
             <div style={inputWrapper}>
@@ -67,7 +80,7 @@ const PipelineConfig = ({ formData, handleChange, runningInstances, region }) =>
           </div>
           <div>
             <h3 style={titleStyle}>EC2 Target Instance</h3>
-            <p style={subTitleStyle}>Select the server where Docker is installed</p>
+            <p style={subTitleStyle}>Select the server for automated deployment</p>
           </div>
         </div>
 
@@ -88,62 +101,9 @@ const PipelineConfig = ({ formData, handleChange, runningInstances, region }) =>
         </div>
       </div>
 
-      {/* ── Section 3: Docker & Port Mapping ──────────────────────────────────── */}
-      <div style={sectionStyle}>
-        <div style={headerStyle}>
-          <div style={iconContainer('#30D158')}>
-            <ShieldCheck size={20} />
-          </div>
-          <div>
-            <h3 style={titleStyle}>Docker Port Mapping</h3>
-            <p style={subTitleStyle}>Define how your container is exposed to the web</p>
-          </div>
-        </div>
-
-        <div style={portMappingCard}>
-          <div style={portBox}>
-            <span style={portLabel}>HOST PORT</span>
-            <span style={portValue}>80</span>
-          </div>
-          <div style={connectorWrapper}>
-            <div style={connectorLine}></div>
-            <ArrowRight size={18} color="#30D158" />
-          </div>
-          <div style={portBox}>
-            <span style={portLabel}>CONTAINER PORT</span>
-            <input 
-              type="number" 
-              name="targetPort" 
-              value={formData.targetPort || 8085} 
-              onChange={handleChange} 
-              style={portInput}
-            />
-          </div>
-          <div style={{ marginLeft: 'auto', maxWidth: '240px' }}>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-2)', lineHeight: 1.4 }}>
-              Your Spring Boot app on port <strong>{formData.targetPort || 8085}</strong> will be accessible via port <strong>80</strong> on the EC2 Public IP.
-            </p>
-          </div>
-        </div>
-
-        <div className="field-group" style={{ marginTop: '24px' }}>
-          <label style={labelStyle}>Build Commands (Optional)</label>
-          <div style={inputWrapper}>
-            <Terminal size={16} style={{ ...inputIcon, alignSelf: 'flex-start', marginTop: '12px' }} />
-            <textarea
-              name="buildCommands"
-              value={formData.buildCommands || 'npm install && npm run build'}
-              onChange={handleChange}
-              placeholder="e.g. ./mvnw package -DskipTests"
-              style={{ ...modernInput, height: '100px', paddingTop: '12px', resize: 'none' }}
-            />
-          </div>
-        </div>
-      </div>
-
       <div style={footerGlow}>
         <Zap size={16} />
-        <span>CI/CD is optimized for one Dockerfile deployment on EC2.</span>
+        <span>Pipeline-as-Code: Define your build and port mapping directly in your 'buildspec.yml'.</span>
       </div>
     </div>
   );
@@ -237,60 +197,6 @@ const modernSelect = {
   ...modernInput,
   appearance: 'none',
   cursor: 'pointer',
-};
-
-const portMappingCard = {
-  background: 'rgba(0,0,0,0.15)',
-  borderRadius: '18px',
-  padding: '20px',
-  display: 'flex',
-  alignItems: 'center',
-  gap: '24px',
-  border: '1px dashed var(--border)',
-};
-
-const portBox = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '4px',
-};
-
-const portLabel = {
-  fontSize: '0.6rem',
-  fontWeight: 800,
-  color: 'var(--text-2)',
-  letterSpacing: '1px',
-};
-
-const portValue = {
-  fontSize: '1.4rem',
-  fontWeight: 800,
-  color: 'white',
-};
-
-const portInput = {
-  background: 'var(--accent-glow)',
-  border: '1px solid var(--accent)',
-  borderRadius: '8px',
-  padding: '4px 8px',
-  fontSize: '1.4rem',
-  fontWeight: 800,
-  color: 'var(--accent)',
-  width: '110px',
-  outline: 'none',
-};
-
-const connectorWrapper = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '8px',
-};
-
-const connectorLine = {
-  width: '40px',
-  height: '2px',
-  background: 'linear-gradient(90deg, var(--border), var(--accent))',
-  borderRadius: '2px',
 };
 
 const footerGlow = {

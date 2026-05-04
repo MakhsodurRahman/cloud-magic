@@ -61,6 +61,8 @@ public class CloudResourceRequest {
     private int maxSize;
     private int desiredCapacity;
     private int targetPort; // e.g. 80 or 8080
+    private int containerPort;
+    private int hostPort;
     
     // VPC Specific
     private String vpcName;
@@ -208,4 +210,9 @@ public class CloudResourceRequest {
     public void setManagedUpdatesEnabled(boolean managedUpdatesEnabled) { this.managedUpdatesEnabled = managedUpdatesEnabled; }
     public String getUpdateLevel() { return updateLevel; }
     public void setUpdateLevel(String updateLevel) { this.updateLevel = updateLevel; }
+
+    public int getContainerPort() { return containerPort; }
+    public void setContainerPort(int containerPort) { this.containerPort = containerPort; }
+    public int getHostPort() { return hostPort; }
+    public void setHostPort(int hostPort) { this.hostPort = hostPort; }
 }
