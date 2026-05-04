@@ -1,0 +1,25 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto21
+  pre_build:
+    commands:
+      - echo "Checking environment..."
+      - java -version
+  build:
+    commands:
+      - echo "Packaging application..."
+      - chmod +x mvnw
+      - ./mvnw clean package -DskipTests
+  post_build:
+    commands:
+      - echo "Build completed on `date`"
+
+artifacts:
+  files:
+    - 'target/*.jar'
+    - 'Dockerfile'
+    - 'scripts/**/*' # Include if you have custom scripts
+  discard-paths: no

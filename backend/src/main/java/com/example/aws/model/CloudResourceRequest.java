@@ -27,6 +27,7 @@ public class CloudResourceRequest {
     private String branch;
     private String targetInstanceId;
     private String buildCommands;
+    private String pipelineTargetType; // "EC2" or "BEANSTALK"
 
     // Elastic Beanstalk Specific
     private String appName;
@@ -60,6 +61,22 @@ public class CloudResourceRequest {
     private int maxSize;
     private int desiredCapacity;
     private int targetPort; // e.g. 80 or 8080
+    
+    // VPC Specific
+    private String vpcName;
+    private String cidrBlock;
+    private String publicSubnetCidr;
+    private String privateSubnetCidr;
+    private String selectedVpc;
+    
+    // Advanced Elastic Beanstalk Options
+    private Map<String, String> environmentVariables;
+    private String deploymentPolicy; // AllAtOnce, Rolling, RollingWithAdditionalBatch, Immutable
+    private String healthReporting; // basic, enhanced
+    private String rootVolumeType; // gp2, gp3
+    private int rootVolumeSize;
+    private boolean managedUpdatesEnabled;
+    private String updateLevel; // patch, minor
 
     // Getters and Setters
     public String getPipelineName() { return pipelineName; }
@@ -72,6 +89,8 @@ public class CloudResourceRequest {
     public void setTargetInstanceId(String targetInstanceId) { this.targetInstanceId = targetInstanceId; }
     public String getBuildCommands() { return buildCommands; }
     public void setBuildCommands(String buildCommands) { this.buildCommands = buildCommands; }
+    public String getPipelineTargetType() { return pipelineTargetType; }
+    public void setPipelineTargetType(String pipelineTargetType) { this.pipelineTargetType = pipelineTargetType; }
 
     public String getAppName() { return appName; }
     public void setAppName(String appName) { this.appName = appName; }
@@ -163,4 +182,30 @@ public class CloudResourceRequest {
     public void setDesiredCapacity(int desiredCapacity) { this.desiredCapacity = desiredCapacity; }
     public int getTargetPort() { return targetPort; }
     public void setTargetPort(int targetPort) { this.targetPort = targetPort; }
+
+    public String getVpcName() { return vpcName; }
+    public void setVpcName(String vpcName) { this.vpcName = vpcName; }
+    public String getCidrBlock() { return cidrBlock; }
+    public void setCidrBlock(String cidrBlock) { this.cidrBlock = cidrBlock; }
+    public String getPublicSubnetCidr() { return publicSubnetCidr; }
+    public void setPublicSubnetCidr(String publicSubnetCidr) { this.publicSubnetCidr = publicSubnetCidr; }
+    public String getPrivateSubnetCidr() { return privateSubnetCidr; }
+    public void setPrivateSubnetCidr(String privateSubnetCidr) { this.privateSubnetCidr = privateSubnetCidr; }
+    public String getSelectedVpc() { return selectedVpc; }
+    public void setSelectedVpc(String selectedVpc) { this.selectedVpc = selectedVpc; }
+
+    public Map<String, String> getEnvironmentVariables() { return environmentVariables; }
+    public void setEnvironmentVariables(Map<String, String> environmentVariables) { this.environmentVariables = environmentVariables; }
+    public String getDeploymentPolicy() { return deploymentPolicy; }
+    public void setDeploymentPolicy(String deploymentPolicy) { this.deploymentPolicy = deploymentPolicy; }
+    public String getHealthReporting() { return healthReporting; }
+    public void setHealthReporting(String healthReporting) { this.healthReporting = healthReporting; }
+    public String getRootVolumeType() { return rootVolumeType; }
+    public void setRootVolumeType(String rootVolumeType) { this.rootVolumeType = rootVolumeType; }
+    public int getRootVolumeSize() { return rootVolumeSize; }
+    public void setRootVolumeSize(int rootVolumeSize) { this.rootVolumeSize = rootVolumeSize; }
+    public boolean isManagedUpdatesEnabled() { return managedUpdatesEnabled; }
+    public void setManagedUpdatesEnabled(boolean managedUpdatesEnabled) { this.managedUpdatesEnabled = managedUpdatesEnabled; }
+    public String getUpdateLevel() { return updateLevel; }
+    public void setUpdateLevel(String updateLevel) { this.updateLevel = updateLevel; }
 }

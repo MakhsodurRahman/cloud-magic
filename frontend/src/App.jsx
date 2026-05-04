@@ -50,25 +50,41 @@ export default function App() {
   const [availableAmis, setAvailableAmis] = useState([]);
   const [availableInstanceTypes, setAvailableInstanceTypes] = useState(['t3.micro', 't2.micro', 't3.small']);
   const [availableKeyPairs, setAvailableKeyPairs] = useState([]);
+  const [availableVpcs, setAvailableVpcs] = useState([]);
   const [runningInstances, setRunningInstances] = useState([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
 
   /* ── Form ── */
   const [formData, setFormData] = useState({
-    instanceName: 'MyMagicInstance', amiId: '', instanceType: 't3.micro',
+    // EC2
+    instanceName: 'MyMagicInstance', amiId: '', instanceType: 't2.micro',
     keyPairName: 'my-key-pair', keyPairSelection: 'existing',
     securityGroupPorts: '22, 80', ebsVolumeSize: 20,
+    // S3
     bucketName: 'my-magic-bucket-' + Math.floor(Math.random() * 9999),
     acl: 'private', selectedSoftware: [],
+    // Pipeline
     pipelineName: 'my-app-pipeline', repoUrl: '', branch: 'main',
     targetInstanceId: '', buildCommands: 'npm test',
+    // Elastic Beanstalk — Full Spec
     appName: 'my-beanstalk-app', environmentName: 'my-beanstalk-env',
-    platform: 'nodejs', envType: 'SingleInstance',
+    platform: 'nodejs', envType: 'LoadBalanced',
+    deploymentPolicy: 'Rolling', healthReporting: 'enhanced',
+    rootVolumeType: 'gp3', rootVolumeSize: 8,
+    managedUpdatesEnabled: true, updateLevel: 'minor',
+    environmentVariables: {},
+    minSize: 1, maxSize: 4,
+    // RDS
     engine: 'mysql', engineVersion: '8.0.35', dbInstanceClass: 'db.t3.micro',
     allocatedStorage: 20, dbName: 'mydb', masterUsername: 'admin', masterPassword: 'password123',
     publiclyAccessible: false,
+    // EC2 Scaling
     loadBalancerEnabled: false, autoScalingEnabled: false,
-    minSize: 1, maxSize: 3, desiredCapacity: 1, targetPort: 80
+    desiredCapacity: 1, targetPort: 80,
+    // VPC
+    vpcName: 'my-magic-vpc', cidrBlock: '10.0.0.0/16',
+    publicSubnetCidr: '10.0.1.0/24', privateSubnetCidr: '10.0.2.0/24',
+    selectedVpc: ''
   });
   const [resourceStack, setResourceStack] = useState([]);
   const [permissions, setPermissions] = useState(null); // Deny-by-default until probe finishes
@@ -132,6 +148,7 @@ export default function App() {
       fetchMeta(`/amis?region=${region}`, setAvailableAmis, d => ({ amiId: d[0].id }));
       fetchMeta(`/instance-types?region=${region}`, setAvailableInstanceTypes, d => ({ instanceType: d[0] }));
       fetchMeta(`/key-pairs?region=${region}`, setAvailableKeyPairs, d => ({ keyPairName: d[0] }));
+      fetchMeta(`/vpcs?region=${region}`, setAvailableVpcs);
     }
   }, [region, cloudProvider, isConnected]);
 
@@ -232,7 +249,12 @@ export default function App() {
 
   const handleChange = e => {
     const { name, value, type, checked } = e.target;
-    setFormData(p => ({ ...p, [name]: type === 'checkbox' ? checked : value }));
+    // Handle plain object values (e.g. environmentVariables Map from BeanstalkConfig)
+    if (typeof value === 'object' && value !== null && type === undefined) {
+      setFormData(p => ({ ...p, [name]: value }));
+    } else {
+      setFormData(p => ({ ...p, [name]: type === 'checkbox' ? checked : value }));
+    }
   };
 
   const toggleSoftware = sw => setFormData(p => ({
@@ -695,6 +717,7 @@ export default function App() {
             formData={formData} handleChange={handleChange}
             toggleSoftware={toggleSoftware}
             availableAmis={availableAmis} availableInstanceTypes={availableInstanceTypes} availableKeyPairs={availableKeyPairs}
+            availableVpcs={availableVpcs}
             runningInstances={runningInstances} region={region}
             resourceStack={resourceStack} addToStack={addToStack} removeFromStack={removeFromStack}
             deploying={deploying} handleDeploy={handleDeploy} handleDestroy={handleDestroy}

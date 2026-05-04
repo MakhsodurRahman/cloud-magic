@@ -67,7 +67,7 @@ export default function CostCalculator({ region }) {
     setSelectedService(svc);
     // Initialize default config based on service
     if (svc.id === 'EC2') {
-      setConfig({ instanceType: 't3.micro', ebsVolumeSize: 30 });
+      setConfig({ instanceType: 't2.micro', ebsVolumeSize: 30 });
     } else if (svc.id === 'S3') {
       setConfig({ storageGB: 100 });
     } else if (svc.id === 'RDS') {
@@ -205,7 +205,7 @@ export default function CostCalculator({ region }) {
                     style={{ width: '100%', padding: '12px', background: 'var(--input-bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-1)', marginBottom: '20px' }}
                   >
                     <option value="t2.micro">t2.micro (Free Tier Eligible)</option>
-                    <option value="t3.micro">t3.micro (Free Tier Eligible)</option>
+                    <option value="t3.micro">t3.micro</option>
                     <option value="t3.small">t3.small</option>
                     <option value="t3.medium">t3.medium</option>
                     <option value="t3.large">t3.large</option>

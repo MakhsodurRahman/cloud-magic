@@ -220,6 +220,43 @@ public class AwsMetadataService {
                 .collect(Collectors.toList());
     }
 
+    public List<Map<String, String>> getVpcs(String region, String accessKey, String secretKey) {
+        try {
+            AmazonEC2 ec2 = getEc2Client(accessKey, secretKey, region);
+            List<Map<String, String>> result = new ArrayList<>();
+
+            for (Vpc vpc : ec2.describeVpcs().getVpcs()) {
+                Map<String, String> map = new HashMap<>();
+                map.put("vpcId", vpc.getVpcId());
+                map.put("cidr", vpc.getCidrBlock());
+                map.put("isDefault", String.valueOf(Boolean.TRUE.equals(vpc.isDefault())));
+
+                // Get the Name tag if it exists
+                String name = vpc.getTags().stream()
+                        .filter(t -> "Name".equals(t.getKey()))
+                        .map(Tag::getValue)
+                        .findFirst()
+                        .orElse("");
+                map.put("name", name);
+
+                // Build a user-friendly label
+                String label = Boolean.TRUE.equals(vpc.isDefault())
+                        ? "Default VPC (" + vpc.getCidrBlock() + ")"
+                        : (name.isEmpty() ? vpc.getVpcId() : name) + " (" + vpc.getCidrBlock() + ")";
+                map.put("label", label);
+
+                result.add(map);
+            }
+
+            // Sort: default VPC first
+            result.sort((a, b) -> Boolean.parseBoolean(b.get("isDefault")) ? 1 : -1);
+            return result;
+        } catch (Exception e) {
+            System.err.println("Failed to fetch VPCs: " + e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
     public void validateCredentials(String accessKey, String secretKey, String region) throws Exception {
         BasicAWSCredentials credentials = new BasicAWSCredentials(accessKey, secretKey);
         AWSSecurityTokenService sts = AWSSecurityTokenServiceClientBuilder.standard()

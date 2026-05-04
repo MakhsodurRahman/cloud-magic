@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Server, Database, GitBranch, Globe, Plus, Play,
   Loader2, Trash2, ArrowLeft, ChevronRight, Layers,
-  HardDrive, Zap
+  HardDrive, Zap, Shield
 } from 'lucide-react';
 
 import EC2Config from './EC2Config';
@@ -10,6 +10,7 @@ import S3Config from './S3Config';
 import PipelineConfig from './PipelineConfig';
 import BeanstalkConfig from './BeanstalkConfig';
 import RdsConfig from './RdsConfig';
+import VpcConfig from './VpcConfig';
 import CostBadge from './CostBadge';
 
 /* ─── Service catalogue ──────────────────────────────────────────────────── */
@@ -59,15 +60,24 @@ const SERVICES = [
     bg: 'rgba(255,55,95,0.12)',
     badge: 'Database',
   },
+  {
+    id: 'VPC',
+    label: 'Virtual Private Cloud',
+    desc: 'Provision a custom isolated network with public and private subnets.',
+    icon: <Shield size={28} />,
+    color: '#34C759',
+    bg: 'rgba(52,199,89,0.12)',
+    badge: 'Network',
+  },
 ];
 
-const SERVICE_ICON = { EC2: <Server size={16} />, S3: <Database size={16} />, PIPELINE: <GitBranch size={16} />, ELASTIC_BEANSTALK: <Globe size={16} />, RDS: <Database size={16} /> };
-const SERVICE_LABEL = { EC2: 'EC2', S3: 'S3', PIPELINE: 'CI/CD', ELASTIC_BEANSTALK: 'Beanstalk', RDS: 'RDS' };
+const SERVICE_ICON = { EC2: <Server size={16} />, S3: <Database size={16} />, PIPELINE: <GitBranch size={16} />, ELASTIC_BEANSTALK: <Globe size={16} />, RDS: <Database size={16} />, VPC: <Shield size={16} /> };
+const SERVICE_LABEL = { EC2: 'EC2', S3: 'S3', PIPELINE: 'CI/CD', ELASTIC_BEANSTALK: 'Beanstalk', RDS: 'RDS', VPC: 'VPC' };
 
 /* ─── Component ──────────────────────────────────────────────────────────── */
 const InfrastructureHub = ({
   formData, handleChange, toggleSoftware,
-  availableAmis, availableInstanceTypes, availableKeyPairs,
+  availableAmis, availableInstanceTypes, availableKeyPairs, availableVpcs,
   runningInstances, region,
   resourceStack, addToStack, removeFromStack,
   deploying, handleDeploy, handleDestroy,
@@ -82,11 +92,12 @@ const InfrastructureHub = ({
 
   const renderConfig = () => {
     const p = { formData, handleChange };
-    if (selectedService === 'EC2') return <EC2Config {...p} toggleSoftware={toggleSoftware} availableAmis={availableAmis} availableInstanceTypes={availableInstanceTypes} availableKeyPairs={availableKeyPairs} />;
+    if (selectedService === 'EC2') return <EC2Config {...p} toggleSoftware={toggleSoftware} availableAmis={availableAmis} availableInstanceTypes={availableInstanceTypes} availableKeyPairs={availableKeyPairs} resourceStack={resourceStack} availableVpcs={availableVpcs} />;
     if (selectedService === 'S3') return <S3Config {...p} />;
     if (selectedService === 'PIPELINE') return <PipelineConfig {...p} runningInstances={runningInstances} region={region} />;
-    if (selectedService === 'ELASTIC_BEANSTALK') return <BeanstalkConfig {...p} />;
-    if (selectedService === 'RDS') return <RdsConfig {...p} region={region} />;
+    if (selectedService === 'ELASTIC_BEANSTALK') return <BeanstalkConfig {...p} availableVpcs={availableVpcs} resourceStack={resourceStack} />;
+    if (selectedService === 'RDS') return <RdsConfig {...p} region={region} availableVpcs={availableVpcs} resourceStack={resourceStack} />;
+    if (selectedService === 'VPC') return <VpcConfig {...p} />;
   };
 
   return (
@@ -192,7 +203,7 @@ const InfrastructureHub = ({
                     <span style={{ color: 'var(--accent)' }}>{SERVICE_ICON[res.serviceType]}</span>
                     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' }}>
                       <span style={{ fontSize: '0.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {SERVICE_LABEL[res.serviceType]}: {res.instanceName || res.bucketName || res.pipelineName || res.appName}
+                        {SERVICE_LABEL[res.serviceType]}: {res.instanceName || res.bucketName || res.pipelineName || res.appName || res.vpcName || res.dbName}
                       </span>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         ID: {res.id ? res.id.toString().slice(-6) : 'NEW'}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Server, Cpu, Database, Terminal, Globe, Zap, Plus } from 'lucide-react';
+import { Server, Cpu, Database, Terminal, Globe, Zap, Plus, Shield } from 'lucide-react';
 
 const SOFTWARE = [
   { id: 'Nodejs',    icon: <Cpu size={13} />,      desc: 'Node.js 20 LTS' },
@@ -9,14 +9,40 @@ const SOFTWARE = [
   { id: 'Redis',     icon: <Database size={13} />,  desc: 'In-memory Cache' },
   { id: 'Nginx',     icon: <Globe size={13} />,     desc: 'Web Server' },
   { id: 'Kafka',     icon: <Cpu size={13} />,       desc: 'Event Streaming' },
+  { id: 'Docker',    icon: <Zap size={13} />,       desc: 'Docker Engine + Compose' },
   { id: 'Utilities', icon: <Server size={13} />,    desc: 'git, curl, build tools' },
 ];
 
-const EC2Config = ({ formData, handleChange, toggleSoftware, availableAmis, availableInstanceTypes, availableKeyPairs }) => (
+const EC2Config = ({ formData, handleChange, toggleSoftware, availableAmis, availableInstanceTypes, availableKeyPairs, availableVpcs = [], resourceStack = [] }) => (
   <>
     <div className="field-group">
       <label className="field-label">Instance Name</label>
       <input name="instanceName" value={formData.instanceName} onChange={handleChange} placeholder="e.g. prod-web-01" />
+    </div>
+
+    <div className="field-group">
+      <label className="field-label">Target VPC</label>
+      <div style={{ position: 'relative' }}>
+        <Shield size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--accent)' }} />
+        <select 
+          name="selectedVpc" 
+          value={formData.selectedVpc || ''} 
+          onChange={handleChange} 
+          style={{ paddingLeft: '34px' }}
+        >
+          <option value="">Default VPC (Auto-discover)</option>
+          {resourceStack.filter(r => r.serviceType === 'VPC').map(vpc => (
+            <option key={`stack-${vpc.id}`} value={vpc.vpcName}>
+              Custom (In Stack): {vpc.vpcName}
+            </option>
+          ))}
+          {availableVpcs.map(vpc => (
+            <option key={`aws-${vpc.vpcId}`} value={vpc.name || vpc.vpcId}>
+              {vpc.label}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
 
     <div className="field-group">

@@ -8,6 +8,7 @@ import com.amazonaws.services.ec2.model.*;
 import com.example.aws.model.CloudResourceRequest;
 import com.example.aws.model.InfrastructureStackRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import java.io.*;
 import java.nio.file.*;
@@ -17,6 +18,9 @@ import java.util.stream.Stream;
 @Service
 public class TerraformService {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Autowired
+    private ElasticBeanstalkService elasticBeanstalkService;
 
     // Base workspace root — org-scoped sub-directories are created beneath this
     private static final String WORKDIR_ROOT = "terraform-workdir";
@@ -58,7 +62,7 @@ public class TerraformService {
 
         if (stack.getResources() != null) {
             for (CloudResourceRequest config : stack.getResources()) {
-                sb.append(generateSingleResourceCode(config, stack.getCloudProvider()));
+                sb.append(generateSingleResourceCode(config, stack));
             }
         }
         return sb.toString();
@@ -75,15 +79,16 @@ public class TerraformService {
         return sb.toString();
     }
 
-    public String generateSingleResourceCode(CloudResourceRequest config, String cloudProvider) {
+    public String generateSingleResourceCode(CloudResourceRequest config, InfrastructureStackRequest stack) {
         StringBuilder sb = new StringBuilder();
-        String provider = cloudProvider != null ? cloudProvider.toLowerCase() : "aws";
+        String provider = stack.getCloudProvider() != null ? stack.getCloudProvider().toLowerCase() : "aws";
         if ("aws".equals(provider)) {
-            if ("EC2".equalsIgnoreCase(config.getServiceType())) generateEc2Code(config, sb);
+            if ("EC2".equalsIgnoreCase(config.getServiceType())) generateEc2Code(config, sb, stack);
             else if ("S3".equalsIgnoreCase(config.getServiceType())) generateS3Code(config, sb);
             else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) generatePipelineCode(config, sb);
-            else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) generateElasticBeanstalkCode(config, sb);
-            else if ("RDS".equalsIgnoreCase(config.getServiceType())) generateRdsCode(config, sb);
+            else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) sb.append(elasticBeanstalkService.generateHcl(config));
+            else if ("RDS".equalsIgnoreCase(config.getServiceType())) generateRdsCode(config, sb, stack);
+            else if ("VPC".equalsIgnoreCase(config.getServiceType())) generateVpcCode(config, sb);
         }
         return sb.toString();
     }
@@ -97,6 +102,7 @@ public class TerraformService {
         else if ("PIPELINE".equalsIgnoreCase(config.getServiceType())) name = config.getPipelineName();
         else if ("ELASTIC_BEANSTALK".equalsIgnoreCase(config.getServiceType())) name = config.getAppName();
         else if ("RDS".equalsIgnoreCase(config.getServiceType())) name = config.getDbName();
+        else if ("VPC".equalsIgnoreCase(config.getServiceType())) name = config.getVpcName();
         
         // Fallback for null names
         if (name == null || name.isBlank()) {
@@ -105,6 +111,95 @@ public class TerraformService {
         
         String safeName = name.replaceAll("[^a-zA-Z0-9-]", "_").toLowerCase();
         return type + "_" + safeName;
+    }
+
+    private void generateVpcCode(CloudResourceRequest config, StringBuilder sb) {
+        String safeName = config.getVpcName() != null ? config.getVpcName().replaceAll("[^a-zA-Z0-9-]", "_").toLowerCase() : "magic_vpc";
+        String cidr = config.getCidrBlock() != null ? config.getCidrBlock() : "10.0.0.0/16";
+        
+        // Modern 2026 Standard: Multi-AZ Subnets
+        String pubCidrA = "10.0.1.0/24";
+        String pubCidrB = "10.0.2.0/24";
+        String privCidrA = "10.0.10.0/24";
+        String privCidrB = "10.0.11.0/24";
+
+        sb.append("data \"aws_availability_zones\" \"available\" {}\n\n");
+
+        sb.append("resource \"aws_vpc\" \"").append(safeName).append("\" {\n");
+        sb.append("  cidr_block           = \"").append(cidr).append("\"\n");
+        sb.append("  enable_dns_hostnames = true\n");
+        sb.append("  enable_dns_support   = true\n");
+        sb.append("  tags = { Name = \"").append(safeName).append("\" }\n");
+        sb.append("}\n\n");
+
+        // Public Subnets (Multi-AZ)
+        for (int i = 0; i < 2; i++) {
+            char az = (char)('a' + i);
+            String cidrBlock = i == 0 ? pubCidrA : pubCidrB;
+            sb.append("resource \"aws_subnet\" \"public_").append(az).append("_").append(safeName).append("\" {\n");
+            sb.append("  vpc_id                  = aws_vpc.").append(safeName).append(".id\n");
+            sb.append("  cidr_block              = \"").append(cidrBlock).append("\"\n");
+            sb.append("  availability_zone       = data.aws_availability_zones.available.names[").append(i).append("]\n");
+            sb.append("  map_public_ip_on_launch = true\n");
+            sb.append("  tags = { Name = \"").append(safeName).append("-public-").append(az).append("\" }\n");
+            sb.append("}\n\n");
+        }
+
+        // Private Subnets (Multi-AZ)
+        for (int i = 0; i < 2; i++) {
+            char az = (char)('a' + i);
+            String cidrBlock = i == 0 ? privCidrA : privCidrB;
+            sb.append("resource \"aws_subnet\" \"private_").append(az).append("_").append(safeName).append("\" {\n");
+            sb.append("  vpc_id            = aws_vpc.").append(safeName).append(".id\n");
+            sb.append("  cidr_block        = \"").append(cidrBlock).append("\"\n");
+            sb.append("  availability_zone = data.aws_availability_zones.available.names[").append(i).append("]\n");
+            sb.append("  tags = { Name = \"").append(safeName).append("-private-").append(az).append("\" }\n");
+            sb.append("}\n\n");
+        }
+
+        // Internet Gateway
+        sb.append("resource \"aws_internet_gateway\" \"igw_").append(safeName).append("\" {\n");
+        sb.append("  vpc_id = aws_vpc.").append(safeName).append(".id\n");
+        sb.append("  tags = { Name = \"").append(safeName).append("-igw\" }\n");
+        sb.append("}\n\n");
+
+        // Public Route Table
+        sb.append("resource \"aws_route_table\" \"pub_rt_").append(safeName).append("\" {\n");
+        sb.append("  vpc_id = aws_vpc.").append(safeName).append(".id\n");
+        sb.append("  route {\n    cidr_block = \"0.0.0.0/0\"\n    gateway_id = aws_internet_gateway.igw_").append(safeName).append(".id\n  }\n");
+        sb.append("  tags = { Name = \"").append(safeName).append("-public-rt\" }\n");
+        sb.append("}\n\n");
+
+        for (int i = 0; i < 2; i++) {
+            char az = (char)('a' + i);
+            sb.append("resource \"aws_route_table_association\" \"pub_assoc_").append(az).append("\" {\n");
+            sb.append("  subnet_id      = aws_subnet.public_").append(az).append("_").append(safeName).append(".id\n");
+            sb.append("  route_table_id = aws_route_table.pub_rt_").append(safeName).append(".id\n");
+            sb.append("}\n\n");
+        }
+
+        // NAT Gateway (Modern Standard for Private Subnet Outbound)
+        sb.append("resource \"aws_eip\" \"nat_eip\" {\n  domain = \"vpc\"\n}\n\n");
+        sb.append("resource \"aws_nat_gateway\" \"nat\" {\n");
+        sb.append("  allocation_id = aws_eip.nat_eip.id\n");
+        sb.append("  subnet_id     = aws_subnet.public_a_").append(safeName).append(".id\n");
+        sb.append("  tags = { Name = \"").append(safeName).append("-nat\" }\n");
+        sb.append("}\n\n");
+
+        // Private Route Table
+        sb.append("resource \"aws_route_table\" \"priv_rt_").append(safeName).append("\" {\n");
+        sb.append("  vpc_id = aws_vpc.").append(safeName).append(".id\n");
+        sb.append("  route {\n    cidr_block = \"0.0.0.0/0\"\n    nat_gateway_id = aws_nat_gateway.nat.id\n  }\n");
+        sb.append("  tags = { Name = \"").append(safeName).append("-private-rt\" }\n");
+        sb.append("}\n\n");
+
+        for (int i = 0; i < 2; i++) {
+            char az = (char)('a' + i);
+            sb.append("resource \"aws_route_table_association\" \"priv_assoc_").append(az).append("\" {\n");
+            sb.append("  subnet_id      = aws_subnet.private_").append(az).append("_").append(safeName).append(".id\n");
+            sb.append("  route_table_id = aws_route_table.priv_rt_").append(safeName).append(".id\n");
+            sb.append("}\n\n");
+        }
     }
 
     private int getDbPort(String engine) {
@@ -116,13 +211,42 @@ public class TerraformService {
         return 3306;
     }
 
-    private void generateRdsCode(CloudResourceRequest config, StringBuilder sb) {
+    private void generateRdsCode(CloudResourceRequest config, StringBuilder sb, InfrastructureStackRequest stack) {
         String safeDbName = config.getDbName() != null ? config.getDbName().replaceAll("[^a-zA-Z0-9]", "").toLowerCase() : "mydb";
         String instanceId = config.getDbName() != null ? config.getDbName().replaceAll("[^a-zA-Z0-9-]", "-").toLowerCase() : "my-rds-db";
         
+        // VPC Discovery
+        boolean hasCustomVpc = false;
+        String customVpcName = "magic_vpc";
+        if (stack.getResources() != null) {
+            for (CloudResourceRequest r : stack.getResources()) {
+                if ("VPC".equalsIgnoreCase(r.getServiceType())) {
+                    hasCustomVpc = true;
+                    customVpcName = r.getVpcName();
+                    break;
+                }
+            }
+        }
+
+        if (hasCustomVpc) {
+            sb.append("data \"aws_vpc\" \"rds_vpc_").append(instanceId).append("\" {\n");
+            sb.append("  filter {\n    name   = \"tag:Name\"\n    values = [\"").append(customVpcName).append("\"]\n  }\n}\n");
+            sb.append("data \"aws_subnets\" \"rds_subnets_").append(instanceId).append("\" {\n");
+            sb.append("  filter {\n    name   = \"vpc-id\"\n    values = [data.aws_vpc.rds_vpc_").append(instanceId).append(".id]\n  }\n}\n\n");
+            sb.append("resource \"aws_db_subnet_group\" \"rds_sng_").append(instanceId).append("\" {\n");
+            sb.append("  name       = \"rds-sng-").append(instanceId).append("\"\n");
+            sb.append("  subnet_ids = data.aws_subnets.rds_subnets_").append(instanceId).append(".ids\n");
+            sb.append("  tags = { Name = \"rds-sng-").append(instanceId).append("\" }\n}\n\n");
+        } else {
+            sb.append("data \"aws_vpc\" \"rds_vpc_").append(instanceId).append("\" { default = true }\n");
+        }
+
+        String vpcRef = "data.aws_vpc.rds_vpc_" + instanceId;
+
         int port = getDbPort(config.getEngine());
         sb.append("resource \"aws_security_group\" \"rds_sg_").append(instanceId).append("\" {\n");
         sb.append("  name        = \"rds-sg-").append(instanceId).append("\"\n");
+        sb.append("  vpc_id      = ").append(vpcRef).append(".id\n");
         sb.append("  description = \"Allow database traffic for ").append(instanceId).append("\"\n\n");
         sb.append("  ingress {\n");
         sb.append("    from_port   = ").append(port).append("\n");
@@ -170,72 +294,10 @@ public class TerraformService {
         sb.append("  username             = \"").append(username).append("\"\n");
         sb.append("  password             = \"").append(config.getMasterPassword() != null && !config.getMasterPassword().equals("null") ? config.getMasterPassword() : "password123").append("\"\n");
         sb.append("  vpc_security_group_ids = [aws_security_group.rds_sg_").append(instanceId).append(".id]\n");
-        sb.append("  publicly_accessible  = ").append(config.isPubliclyAccessible() ? "true" : "false").append("\n");
-        sb.append("  skip_final_snapshot  = true\n"); // For dev environments, normally false for prod
-        sb.append("}\n\n");
-    }
-
-    private void generateElasticBeanstalkCode(CloudResourceRequest config, StringBuilder sb) {
-        String safeEnvName = config.getEnvironmentName().replaceAll("[^a-zA-Z0-9-]", "-");
-        
-        // 1. IAM Role & Instance Profile (Mandatory for Beanstalk EC2 instances)
-        sb.append("resource \"aws_iam_role\" \"beanstalk_ec2_").append(safeEnvName).append("\" {\n");
-        sb.append("  name = \"").append(safeEnvName).append("-ec2-role\"\n");
-        sb.append("  assume_role_policy = jsonencode({\n");
-        sb.append("    Version = \"2012-10-17\"\n");
-        sb.append("    Statement = [{ Action = \"sts:AssumeRole\", Effect = \"Allow\", Principal = { Service = \"ec2.amazonaws.com\" } }]\n");
-        sb.append("  })\n");
-        sb.append("}\n\n");
-        
-        sb.append("resource \"aws_iam_role_policy_attachment\" \"beanstalk_web_tier_").append(safeEnvName).append("\" {\n");
-        sb.append("  role       = aws_iam_role.beanstalk_ec2_").append(safeEnvName).append(".name\n");
-        sb.append("  policy_arn = \"arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier\"\n");
-        sb.append("}\n\n");
-
-        sb.append("resource \"aws_iam_instance_profile\" \"beanstalk_profile_").append(safeEnvName).append("\" {\n");
-        sb.append("  name = \"").append(safeEnvName).append("-profile\"\n");
-        sb.append("  role = aws_iam_role.beanstalk_ec2_").append(safeEnvName).append(".name\n");
-        sb.append("}\n\n");
-
-        // 2. Application
-        sb.append("resource \"aws_elastic_beanstalk_application\" \"app\" {\n");
-        sb.append("  name = \"").append(config.getAppName()).append("\"\n");
-        sb.append("}\n\n");
-        
-        // 3. Environment
-        sb.append("resource \"aws_elastic_beanstalk_environment\" \"env\" {\n");
-        sb.append("  name                = \"").append(safeEnvName).append("\"\n");
-        sb.append("  application         = aws_elastic_beanstalk_application.app.name\n");
-        
-        // Define stack based on platform
-        String solutionStack = "64bit Amazon Linux 2023 v6.1.1 running Node.js 20";
-        if ("java".equalsIgnoreCase(config.getPlatform())) {
-            solutionStack = "64bit Amazon Linux 2023 v4.1.1 running Corretto 21";
-        } else if ("python".equalsIgnoreCase(config.getPlatform())) {
-            solutionStack = "64bit Amazon Linux 2023 v4.0.1 running Python 3.11";
-        } else if ("docker".equalsIgnoreCase(config.getPlatform())) {
-            solutionStack = "64bit Amazon Linux 2023 v4.0.1 running Docker";
+        if (hasCustomVpc) {
+            sb.append("  db_subnet_group_name   = aws_db_subnet_group.rds_sng_").append(instanceId).append(".name\n");
         }
-        
-        sb.append("  solution_stack_name = \"").append(solutionStack).append("\"\n\n");
-        
-        sb.append("  setting {\n");
-        sb.append("    namespace = \"aws:autoscaling:launchconfiguration\"\n");
-        sb.append("    name      = \"IamInstanceProfile\"\n");
-        sb.append("    value     = aws_iam_instance_profile.beanstalk_profile_").append(safeEnvName).append(".name\n");
-        sb.append("  }\n\n");
-        
-        sb.append("  setting {\n");
-        sb.append("    namespace = \"aws:autoscaling:launchconfiguration\"\n");
-        sb.append("    name      = \"InstanceType\"\n");
-        sb.append("    value     = \"").append(config.getInstanceType() != null ? config.getInstanceType() : "t3.micro").append("\"\n");
-        sb.append("  }\n\n");
-        
-        sb.append("  setting {\n");
-        sb.append("    namespace = \"aws:elasticbeanstalk:environment\"\n");
-        sb.append("    name      = \"EnvironmentType\"\n");
-        sb.append("    value     = \"").append(config.getEnvType() != null ? config.getEnvType() : "SingleInstance").append("\"\n");
-        sb.append("  }\n");
+        sb.append("  publicly_accessible  = ").append(config.isPubliclyAccessible() ? "true" : "false").append("\n");
         sb.append("}\n\n");
     }
 
@@ -243,7 +305,7 @@ public class TerraformService {
         String safeName = config.getPipelineName().replaceAll("[^a-zA-Z0-9]", "_");
         String bucketName = "pipeline-artifacts-" + safeName.toLowerCase().replace("_", "-") + "-" + System.currentTimeMillis();
 
-        sb.append("# 🚀 Magic CI/CD Pipeline (Fast Mode): ").append(config.getPipelineName()).append("\n");
+        sb.append("# 🚀 Magic CI/CD Pipeline (EC2 Docker Mode): ").append(config.getPipelineName()).append("\n");
         sb.append("# NOTE: Manually authorize GitHub connection in AWS Console > Settings > Connections\n\n");
 
         // 1. Artifact Bucket
@@ -258,7 +320,7 @@ public class TerraformService {
         // 3. IAM Roles
         generatePipelineIamRoles(safeName, sb);
 
-        // 4. CodeBuild Project (Handles Build & Deploy)
+        // 4. CodeBuild Project
         sb.append("resource \"aws_codebuild_project\" \"").append(safeName).append("\" {\n");
         sb.append("  name          = \"").append(config.getPipelineName()).append("\"\n");
         sb.append("  service_role  = aws_iam_role.codebuild_role_").append(safeName).append(".arn\n");
@@ -274,11 +336,10 @@ public class TerraformService {
         sb.append("      version: 0.2\n");
         sb.append("      phases:\n");
         sb.append("        install:\n");
-        sb.append("          runtime-versions:\n            nodejs: 20\n");
+        sb.append("          runtime-versions:\n            nodejs: 20\n            docker: 20\n");
         sb.append("        build:\n");
         sb.append("          commands:\n");
-        sb.append("            - npm install\n");
-        sb.append("            - ").append(config.getBuildCommands() != null ? config.getBuildCommands() : "npm run build").append("\n");
+        sb.append("            - ").append(config.getBuildCommands() != null ? config.getBuildCommands() : "npm install && npm run build").append("\n");
         sb.append("        post_build:\n");
         sb.append("          commands:\n");
         sb.append("            - echo \"Deploying to EC2 via SSM...\"\n");
@@ -287,14 +348,16 @@ public class TerraformService {
         sb.append("            - |\n");
         sb.append("              INSTANCE_ID=$(aws ec2 describe-instances --filters \"Name=tag:Name,Values=$TARGET_INSTANCE_NAME\" \"Name=instance-state-name,Values=running\" --query \"Reservations[].Instances[0].InstanceId\" --output text)\n");
         sb.append("              if [ \"$INSTANCE_ID\" != \"None\" ]; then\n");
-        sb.append("                aws ssm send-command --instance-ids \"$INSTANCE_ID\" --document-name \"AWS-RunShellScript\" --parameters 'commands=[\"aws s3 cp s3://'\"$ARTIFACT_BUCKET\"'/app.zip /tmp/app.zip\", \"unzip -o /tmp/app.zip -d /var/www/html\", \"rm /tmp/app.zip\"]' --region ").append(config.getRegion()).append("\n");
+        sb.append("                aws ssm send-command --instance-ids \"$INSTANCE_ID\" --document-name \"AWS-RunShellScript\" --parameters 'commands=[\"aws s3 cp s3://'\"$ARTIFACT_BUCKET\"'/app.zip /tmp/app.zip\", \"unzip -o /tmp/app.zip -d /app\", \"cd /app\", \"if [ -f Dockerfile ]; then echo \\\"Dockerfile found, building...\\\"; docker build -t magic-app . && docker stop magic-app || true && docker rm magic-app || true && docker run -d --name magic-app -p 80:").append(config.getTargetPort() != 0 ? config.getTargetPort() : 8085).append(" magic-app; else echo \\\"No Dockerfile, skipping build\\\"; fi\", \"rm /tmp/app.zip\"]' --region ").append(config.getRegion()).append("\n");
         sb.append("              else\n");
         sb.append("                echo \"Error: Target instance $TARGET_INSTANCE_NAME not found or not running.\"\n");
         sb.append("                exit 1\n");
         sb.append("              fi\n");
+        sb.append("      artifacts:\n");
+        sb.append("        files:\n          - '**/*'\n");
         sb.append("      BUILDSPEC\n  }\n}\n\n");
 
-        // 5. The Pipeline (Source -> Build/Deploy)
+        // 5. The Pipeline (Source -> Build)
         sb.append("resource \"aws_codepipeline\" \"").append(safeName).append("\" {\n");
         sb.append("  name     = \"").append(config.getPipelineName()).append("\"\n");
         sb.append("  role_arn = aws_iam_role.pipeline_role_").append(safeName).append(".arn\n");
@@ -308,7 +371,8 @@ public class TerraformService {
         sb.append("        FullRepositoryId = \"").append(repoSlug).append("\"\n");
         sb.append("        BranchName = \"").append(config.getBranch()).append("\"\n      }\n    }\n  }\n\n");
 
-        sb.append("  stage {\n    name = \"BuildAndDeploy\"\n    action {\n      name = \"BuildAndDeploy\"\n      category = \"Build\"\n      owner = \"AWS\"\n      provider = \"CodeBuild\"\n      version = \"1\"\n      input_artifacts = [\"source_output\"]\n      configuration = { ProjectName = aws_codebuild_project.").append(safeName).append(".name }\n    }\n  }\n}\n\n");
+        sb.append("  stage {\n    name = \"Build\"\n    action {\n      name = \"Build\"\n      category = \"Build\"\n      owner = \"AWS\"\n      provider = \"CodeBuild\"\n      version = \"1\"\n      input_artifacts = [\"source_output\"]\n      output_artifacts = [\"build_output\"]\n      configuration = { ProjectName = aws_codebuild_project.").append(safeName).append(".name }\n    }\n  }\n");
+        sb.append("}\n\n");
     }
 
     private void generatePipelineIamRoles(String safeName, StringBuilder sb) {
@@ -316,27 +380,58 @@ public class TerraformService {
         sb.append("resource \"aws_iam_role\" \"codebuild_role_").append(safeName).append("\" {\n");
         sb.append("  name = \"codebuild-role-").append(safeName).append("\"\n  assume_role_policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = \"sts:AssumeRole\", Effect = \"Allow\", Principal = { Service = \"codebuild.amazonaws.com\" } }] })\n}\n\n");
         sb.append("resource \"aws_iam_role_policy\" \"codebuild_policy_").append(safeName).append("\" {\n");
-        sb.append("  role = aws_iam_role.codebuild_role_").append(safeName).append(".name\n  policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = [\"logs:*\", \"s3:*\", \"codebuild:*\", \"ssm:SendCommand\", \"ssm:GetCommandInvocation\", \"ec2:DescribeInstances\"], Resource = \"*\", Effect = \"Allow\" }] })\n}\n\n");
+        sb.append("  role = aws_iam_role.codebuild_role_").append(safeName).append(".name\n  policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = [\"logs:*\", \"s3:*\", \"codebuild:*\", \"ssm:SendCommand\", \"ssm:GetCommandInvocation\", \"ec2:DescribeInstances\", \"autoscaling:*\", \"iam:PassRole\"], Resource = \"*\", Effect = \"Allow\" }] })\n}\n\n");
 
         // Pipeline Role
         sb.append("resource \"aws_iam_role\" \"pipeline_role_").append(safeName).append("\" {\n");
         sb.append("  name = \"pipeline-role-").append(safeName).append("\"\n  assume_role_policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = \"sts:AssumeRole\", Effect = \"Allow\", Principal = { Service = \"codepipeline.amazonaws.com\" } }] })\n}\n\n");
         sb.append("resource \"aws_iam_role_policy\" \"pipeline_policy_").append(safeName).append("\" {\n");
-        sb.append("  role = aws_iam_role.pipeline_role_").append(safeName).append(".name\n  policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = [\"s3:*\", \"codebuild:*\", \"codestar-connections:*\"], Resource = \"*\", Effect = \"Allow\" }] })\n}\n\n");
+        sb.append("  role = aws_iam_role.pipeline_role_").append(safeName).append(".name\n  policy = jsonencode({ Version = \"2012-10-17\", Statement = [{ Action = [\"s3:*\", \"codebuild:*\", \"codestar-connections:*\", \"ec2:*\", \"iam:PassRole\"], Resource = \"*\", Effect = \"Allow\" }] })\n}\n\n");
     }
 
-    private void generateEc2Code(CloudResourceRequest config, StringBuilder sb) {
+    private void generateEc2Code(CloudResourceRequest config, StringBuilder sb, InfrastructureStackRequest stack) {
         String safeName = config.getInstanceName().replaceAll("\\s+", "_");
         boolean isScaling = config.isAutoScalingEnabled();
         boolean isLb = config.isLoadBalancerEnabled();
 
-        // 1. Data Sources for VPC/Subnets (Needed for ALB/ASG)
-        sb.append("data \"aws_vpc\" \"default_").append(safeName).append("\" { default = true }\n");
-        sb.append("data \"aws_subnets\" \"default_").append(safeName).append("\" {\n");
-        sb.append("  filter {\n    name   = \"vpc-id\"\n    values = [data.aws_vpc.default_").append(safeName).append(".id]\n  }\n}\n\n");
+        // 1. VPC/Subnet Discovery Logic
+        boolean hasCustomVpc = false;
+        String customVpcName = "magic_vpc";
+        
+        // Priority 1: Manually selected VPC from dropdown
+        if (config.getSelectedVpc() != null && !config.getSelectedVpc().isBlank()) {
+            hasCustomVpc = true;
+            customVpcName = config.getSelectedVpc();
+        } 
+        // Priority 2: Auto-discovery from stack
+        else if (stack.getResources() != null) {
+            for (CloudResourceRequest r : stack.getResources()) {
+                if ("VPC".equalsIgnoreCase(r.getServiceType())) {
+                    hasCustomVpc = true;
+                    customVpcName = r.getVpcName();
+                    break;
+                }
+            }
+        }
+        if (hasCustomVpc) {
+            sb.append("data \"aws_vpc\" \"target_").append(safeName).append("\" {\n");
+            sb.append("  filter {\n    name   = \"tag:Name\"\n    values = [\"").append(customVpcName).append("\"]\n  }\n}\n");
+            
+            // Filter for PUBLIC subnets specifically for ALB/ELB
+            sb.append("data \"aws_subnets\" \"target_").append(safeName).append("\" {\n");
+            sb.append("  filter {\n    name   = \"vpc-id\"\n    values = [data.aws_vpc.target_").append(safeName).append(".id]\n  }\n");
+            sb.append("  filter {\n    name   = \"tag:Name\"\n    values = [\"*-public-*\"]\n  }\n}\n\n");
+        } else {
+            sb.append("data \"aws_vpc\" \"default_").append(safeName).append("\" { default = true }\n");
+            sb.append("data \"aws_subnets\" \"default_").append(safeName).append("\" {\n");
+            sb.append("  filter {\n    name   = \"vpc-id\"\n    values = [data.aws_vpc.default_").append(safeName).append(".id]\n  }\n}\n\n");
+        }
+
+        String vpcDataRef = hasCustomVpc ? "data.aws_vpc.target_" + safeName : "data.aws_vpc.default_" + safeName;
+        String subnetsDataRef = hasCustomVpc ? "data.aws_subnets.target_" + safeName : "data.aws_subnets.default_" + safeName;
 
         // 2. Security Group
-        generateSecurityGroup(config, sb);
+        generateSecurityGroup(config, sb, vpcDataRef);
 
         // 3. IAM Role & Instance Profile
         sb.append("resource \"aws_iam_role\" \"ec2_role_").append(safeName).append("\" {\n");
@@ -362,7 +457,7 @@ public class TerraformService {
 
         // 5. Load Balancer (ALB) Setup
         if (isLb) {
-            generateLoadBalancerCode(config, safeName, sb);
+            generateLoadBalancerCode(config, safeName, sb, subnetsDataRef, vpcDataRef);
         }
 
         // 6. Compute Layer (Instance OR ASG)
@@ -371,13 +466,18 @@ public class TerraformService {
             sb.append("resource \"aws_launch_template\" \"").append(safeName).append("\" {\n");
             sb.append("  name_prefix   = \"").append(safeName).append("-lt\"\n");
             sb.append("  image_id      = ").append(amiValue).append("\n");
-            sb.append("  instance_type = \"").append(config.getInstanceType() != null ? config.getInstanceType() : "t3.micro").append("\"\n");
+            sb.append("  instance_type = \"").append(config.getInstanceType() != null ? config.getInstanceType() : "t2.micro").append("\"\n");
             sb.append("  key_name      = \"").append(config.getKeyPairName() != null ? config.getKeyPairName() : "").append("\"\n\n");
             sb.append("  network_interfaces {\n");
             sb.append("    associate_public_ip_address = true\n");
             sb.append("    security_groups             = [aws_security_group.magic_sg_").append(safeName).append(".id]\n");
             sb.append("  }\n\n");
             sb.append("  iam_instance_profile {\n    name = aws_iam_instance_profile.ec2_profile_").append(safeName).append(".name\n  }\n\n");
+            
+            sb.append("  tag_specifications {\n");
+            sb.append("    resource_type = \"instance\"\n");
+            sb.append("    tags = { Name = \"").append(config.getInstanceName()).append("\" }\n");
+            sb.append("  }\n\n");
             
             if (config.getSelectedSoftware() != null && !config.getSelectedSoftware().isEmpty()) {
                 sb.append("  user_data = base64encode(<<-EOF\n");
@@ -393,7 +493,7 @@ public class TerraformService {
             sb.append("  min_size            = ").append(config.getMinSize() > 0 ? config.getMinSize() : 1).append("\n");
             sb.append("  max_size            = ").append(config.getMaxSize() > 0 ? config.getMaxSize() : 3).append("\n");
             sb.append("  desired_capacity    = ").append(config.getDesiredCapacity() > 0 ? config.getDesiredCapacity() : 1).append("\n");
-            sb.append("  vpc_zone_identifier = data.aws_subnets.default_").append(safeName).append(".ids\n\n");
+            sb.append("  vpc_zone_identifier = ").append(subnetsDataRef).append(".ids\n\n");
             sb.append("  launch_template {\n");
             sb.append("    id      = aws_launch_template.").append(safeName).append(".id\n");
             sb.append("    version = \"$Latest\"\n");
@@ -402,15 +502,22 @@ public class TerraformService {
             if (isLb) {
                 sb.append("  target_group_arns = [aws_lb_target_group.tg_").append(safeName).append(".arn]\n");
             }
+            
+            sb.append("  tag {\n");
+            sb.append("    key                 = \"Name\"\n");
+            sb.append("    value               = \"").append(config.getInstanceName()).append("\"\n");
+            sb.append("    propagate_at_launch = true\n");
+            sb.append("  }\n");
             sb.append("}\n\n");
         } else {
             // Simple Instance Mode
             sb.append("resource \"aws_instance\" \"").append(safeName).append("\" {\n");
             sb.append("  ami           = ").append(amiValue).append("\n");
-            sb.append("  instance_type = \"").append(config.getInstanceType() != null ? config.getInstanceType() : "t3.micro").append("\"\n");
+            sb.append("  instance_type = \"").append(config.getInstanceType() != null ? config.getInstanceType() : "t2.micro").append("\"\n");
             sb.append("  key_name      = \"").append(config.getKeyPairName() != null ? config.getKeyPairName() : "").append("\"\n");
             sb.append("  iam_instance_profile = aws_iam_instance_profile.ec2_profile_").append(safeName).append(".name\n");
-            sb.append("  vpc_security_group_ids = [aws_security_group.magic_sg_").append(safeName).append(".id]\n\n");
+            sb.append("  vpc_security_group_ids = [aws_security_group.magic_sg_").append(safeName).append(".id]\n");
+            sb.append("  subnet_id              = ").append(subnetsDataRef).append(".ids[0]\n\n");
 
             if (config.getSelectedSoftware() != null && !config.getSelectedSoftware().isEmpty()) {
                 sb.append("  user_data = <<-EOF\n");
@@ -424,8 +531,8 @@ public class TerraformService {
             sb.append("}\n\n");
         }
     }
-
-    private void generateLoadBalancerCode(CloudResourceRequest config, String safeName, StringBuilder sb) {
+    
+    private void generateLoadBalancerCode(CloudResourceRequest config, String safeName, StringBuilder sb, String subnetsDataRef, String vpcDataRef) {
         int port = config.getTargetPort() > 0 ? config.getTargetPort() : 80;
 
         sb.append("resource \"aws_lb\" \"lb_").append(safeName).append("\" {\n");
@@ -433,14 +540,14 @@ public class TerraformService {
         sb.append("  internal           = false\n");
         sb.append("  load_balancer_type = \"application\"\n");
         sb.append("  security_groups    = [aws_security_group.magic_sg_").append(safeName).append(".id]\n");
-        sb.append("  subnets            = data.aws_subnets.default_").append(safeName).append(".ids\n");
+        sb.append("  subnets            = ").append(subnetsDataRef).append(".ids\n");
         sb.append("}\n\n");
 
         sb.append("resource \"aws_lb_target_group\" \"tg_").append(safeName).append("\" {\n");
         sb.append("  name     = \"tg-").append(safeName).append("\"\n");
         sb.append("  port     = ").append(port).append("\n");
         sb.append("  protocol = \"HTTP\"\n");
-        sb.append("  vpc_id   = data.aws_vpc.default_").append(safeName).append(".id\n");
+        sb.append("  vpc_id   = ").append(vpcDataRef).append(".id\n");
         sb.append("  health_check {\n    path = \"/\"\n    port = ").append(port).append("\n  }\n");
         sb.append("}\n\n");
 
@@ -490,15 +597,26 @@ public class TerraformService {
                        "              mv kafka_2.13-3.7.0 /home/ubuntu/kafka\n";
             case "utilities":
                 return "              sudo apt-get install -y git curl wget unzip build-essential\n";
+            case "docker":
+                return "              sudo apt-get install -y ca-certificates curl gnupg lsb-release\n" +
+                       "              sudo mkdir -p /etc/apt/keyrings\n" +
+                       "              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg\n" +
+                       "              echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null\n" +
+                       "              sudo apt-get update\n" +
+                       "              sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin\n" +
+                       "              sudo usermod -aG docker ubuntu\n" +
+                       "              sudo systemctl enable docker\n" +
+                       "              sudo systemctl start docker\n";
             default:
                 return "";
         }
     }
 
-    private void generateSecurityGroup(CloudResourceRequest config, StringBuilder sb) {
+    private void generateSecurityGroup(CloudResourceRequest config, StringBuilder sb, String vpcDataRef) {
         String safeName = config.getInstanceName().replaceAll("\\s+", "_");
         sb.append("resource \"aws_security_group\" \"magic_sg_").append(safeName).append("\" {\n");
         sb.append("  name        = \"magic-sg-").append(safeName).append("\"\n");
+        sb.append("  vpc_id      = ").append(vpcDataRef).append(".id\n");
         sb.append("  description = \"Allow traffic for ").append(config.getInstanceName()).append("\"\n\n");
 
         List<Integer> ports = config.getSecurityGroupPorts() != null 
@@ -624,7 +742,7 @@ public class TerraformService {
                 Files.createDirectories(moduleDir);
 
                 // Write resource HCL into the module
-                String resourceCode = generateSingleResourceCode(config, stack.getCloudProvider());
+                String resourceCode = generateSingleResourceCode(config, stack);
                 Files.write(moduleDir.resolve("main.tf"), resourceCode.getBytes());
 
                 // Add module call to main.tf
@@ -764,6 +882,8 @@ public class TerraformService {
                             else if ("EC2".equals(type)) r.setInstanceName(name);
                             else if ("PIPELINE".equals(type)) r.setPipelineName(name);
                             else if ("ELASTIC_BEANSTALK".equals(type)) r.setAppName(name);
+                            else if ("RDS".equals(type)) r.setDbName(name);
+                            else if ("VPC".equals(type)) r.setVpcName(name);
                             else r.setInstanceName(name); // fallback
                         } else {
                             r.setServiceType("UNKNOWN");

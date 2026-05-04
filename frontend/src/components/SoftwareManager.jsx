@@ -13,6 +13,7 @@ const SOFTWARE_LIST = [
   { id: 'Redis', icon: <Database size={18} />, desc: 'High-performance In-memory Data Store' },
   { id: 'Nginx', icon: <Globe size={18} />, desc: 'Professional Web Server & Reverse Proxy' },
   { id: 'Kafka', icon: <Cpu size={18} />, desc: 'Distributed Event Streaming Platform' },
+  { id: 'Docker', icon: <Compass size={18} />, desc: 'Containerization Engine & Docker Compose' },
   { id: 'Utilities', icon: <Server size={18} />, desc: 'Standard Linux Tools (git, curl, build-essential)' },
 ];
 

@@ -88,6 +88,14 @@ public class AwsMetadataController {
         return metadataService.getKeyPairs(region, accessKey, secretKey);
     }
 
+    @GetMapping("/vpcs")
+    public List<Map<String, String>> getVpcs(
+            @RequestParam String region,
+            @RequestHeader(value = "X-AWS-Access-Key", required = false) String accessKey,
+            @RequestHeader(value = "X-AWS-Secret-Key", required = false) String secretKey) {
+        return metadataService.getVpcs(region, accessKey, secretKey);
+    }
+
     @GetMapping("/validate")
     public ResponseEntity<String> validateCredentials(
             @RequestHeader("X-AWS-Access-Key") String accessKey,

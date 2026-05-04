@@ -26,7 +26,7 @@ public class CostEstimationService {
         String type = (request == null || request.getServiceType() == null) ? "UNKNOWN" : request.getServiceType().toUpperCase();
 
         if ("EC2".equals(type)) {
-            String instanceType = request.getInstanceType() != null ? request.getInstanceType() : "t3.micro";
+            String instanceType = request.getInstanceType() != null ? request.getInstanceType() : "t2.micro";
             double hourly = getLiveEc2Price(instanceType, region, accessKey, secretKey);
             double computeMonthly = hourly * 24 * 30;
             int volumeSize = request.getEbsVolumeSize() > 0 ? request.getEbsVolumeSize() : 8;
