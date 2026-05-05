@@ -17,7 +17,8 @@ public class PipelineService {
     public String generatePipelineHcl(CloudResourceRequest config) {
         StringBuilder sb = new StringBuilder();
         String safeName = config.getPipelineName().replaceAll("[^a-zA-Z0-9-]", "_").toLowerCase();
-        String bucketName = "pipeline-artifacts-" + safeName.toLowerCase().replace("_", "-") + "-" + System.currentTimeMillis();
+        // STABLE bucket name — NO timestamps here to prevent recreation
+        String bucketName = "pipeline-artifacts-" + safeName.toLowerCase().replace("_", "-") + "-stable";
 
         sb.append("# 🚀 Magic CI/CD Pipeline (Pipeline-as-Code Mode)\n");
         sb.append("# This pipeline uses the buildspec.yml and Dockerfile directly from your repository.\n\n");
@@ -52,21 +53,30 @@ public class PipelineService {
         sb.append("    environment_variable {\n      name  = \"AWS_REGION_NAME\"\n      value = \"").append(config.getRegion()).append("\"\n    }\n");
         sb.append("  }\n\n");
 
-        sb.append("  source {\n");
-        sb.append("    type      = \"CODEPIPELINE\"\n");
-        sb.append("  }\n}\n\n");
+        sb.append("  source {\n    type      = \"CODEPIPELINE\"\n  }\n}\n\n");
 
         // 5. CodePipeline
         sb.append("resource \"aws_codepipeline\" \"").append(safeName).append("\" {\n");
-        sb.append("  name     = \"").append(config.getPipelineName()).append("\"\n");
-        sb.append("  role_arn = aws_iam_role.pipeline_role_").append(safeName).append(".arn\n");
+        sb.append("  name          = \"").append(config.getPipelineName()).append("\"\n");
+        sb.append("  role_arn      = aws_iam_role.pipeline_role_").append(safeName).append(".arn\n");
+        sb.append("  pipeline_type = \"V2\"\n\n");
         sb.append("  artifact_store {\n    location = aws_s3_bucket.pipeline_artifacts_").append(safeName).append(".bucket\n    type     = \"S3\"\n  }\n\n");
+        
+        // Trigger block for V2 Pipeline (Required for Push-to-Deploy)
+        sb.append("  trigger {\n    provider_type = \"CodeStarSourceConnection\"\n    git_configuration {\n      source_action_name = \"Source\"\n      push {\n        branches {\n          includes = [\"").append(config.getBranch() != null ? config.getBranch() : "main").append("\"]\n        }\n      }\n    }\n  }\n\n");
         
         sb.append("  stage {\n    name = \"Source\"\n    action {\n      name             = \"Source\"\n      category         = \"Source\"\n      owner            = \"AWS\"\n      provider         = \"CodeStarSourceConnection\"\n      version          = \"1\"\n      output_artifacts = [\"source_output\"]\n");
         sb.append("      configuration = {\n        ConnectionArn    = aws_codestarconnections_connection.github_").append(safeName).append(".arn\n");
-        String repoSlug = config.getRepoUrl().replace("https://github.com/", "").replace(".git", "");
+        
+        String repoUrl = config.getRepoUrl();
+        String repoSlug = repoUrl
+                .replace("https://github.com/", "")
+                .replace("http://github.com/", "")
+                .replace(".git", "");
+        if (repoSlug.endsWith("/")) repoSlug = repoSlug.substring(0, repoSlug.length() - 1);
+        
         sb.append("        FullRepositoryId = \"").append(repoSlug).append("\"\n");
-        sb.append("        BranchName       = \"").append(config.getBranch()).append("\"\n");
+        sb.append("        BranchName       = \"").append(config.getBranch() != null && !config.getBranch().isEmpty() ? config.getBranch() : "main").append("\"\n");
         sb.append("        DetectChanges    = \"true\"\n      }\n    }\n  }\n\n");
 
         sb.append("  stage {\n    name = \"Build-And-Deploy\"\n    action {\n      name            = \"Execute-Buildspec\"\n      category        = \"Build\"\n      owner           = \"AWS\"\n      provider        = \"CodeBuild\"\n      version         = \"1\"\n      input_artifacts = [\"source_output\"]\n      configuration   = { ProjectName = aws_codebuild_project.").append(safeName).append(".name }\n    }\n  }\n}\n");
@@ -159,7 +169,7 @@ public class PipelineService {
         sb.append("resource \"aws_iam_role_policy\" \"pipeline_policy_").append(safeName).append("\" {\n");
         sb.append("  role   = aws_iam_role.pipeline_role_").append(safeName).append(".name\n");
         sb.append("  policy = jsonencode({ Version = \"2012-10-17\", Statement = [{\n");
-        sb.append("    Action = [\"s3:*\", \"codebuild:*\", \"codestar-connections:*\", \"iam:PassRole\"],\n");
+        sb.append("    Action = [\"s3:*\", \"codebuild:*\", \"codestar-connections:*\", \"codestar-connections:UseConnection\", \"codestar-connections:GetConnection\", \"iam:PassRole\"],\n");
         sb.append("    Resource = \"*\",\n");
         sb.append("    Effect = \"Allow\"\n  }] })\n}\n\n");
     }
