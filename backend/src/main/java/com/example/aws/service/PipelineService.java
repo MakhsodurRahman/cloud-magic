@@ -66,7 +66,8 @@ public class PipelineService {
         sb.append("      configuration = {\n        ConnectionArn    = aws_codestarconnections_connection.github_").append(safeName).append(".arn\n");
         String repoSlug = config.getRepoUrl().replace("https://github.com/", "").replace(".git", "");
         sb.append("        FullRepositoryId = \"").append(repoSlug).append("\"\n");
-        sb.append("        BranchName       = \"").append(config.getBranch()).append("\"\n      }\n    }\n  }\n\n");
+        sb.append("        BranchName       = \"").append(config.getBranch()).append("\"\n");
+        sb.append("        DetectChanges    = \"true\"\n      }\n    }\n  }\n\n");
 
         sb.append("  stage {\n    name = \"Build-And-Deploy\"\n    action {\n      name            = \"Execute-Buildspec\"\n      category        = \"Build\"\n      owner           = \"AWS\"\n      provider        = \"CodeBuild\"\n      version         = \"1\"\n      input_artifacts = [\"source_output\"]\n      configuration   = { ProjectName = aws_codebuild_project.").append(safeName).append(".name }\n    }\n  }\n}\n");
 

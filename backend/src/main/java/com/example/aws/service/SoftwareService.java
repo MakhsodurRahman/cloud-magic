@@ -134,16 +134,24 @@ public class SoftwareService {
                 };
             case "docker":
                 return new String[]{
-                    "sudo apt-get update -y",
-                    "sudo apt-get install -y ca-certificates curl gnupg lsb-release",
-                    "sudo mkdir -p /etc/apt/keyrings",
-                    "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg || true",
-                    "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null",
-                    "sudo apt-get update -y",
-                    "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin",
-                    "sudo usermod -aG docker $(whoami)",
+                    "if command -v apt-get >/dev/null; then " +
+                        "sudo apt-get update -y && " +
+                        "sudo apt-get install -y ca-certificates curl gnupg lsb-release && " +
+                        "sudo mkdir -m 0755 -p /etc/apt/keyrings && " +
+                        "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg && " +
+                        "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && " +
+                        "sudo apt-get update -y && " +
+                        "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin; " +
+                    "elif command -v dnf >/dev/null; then " +
+                        "sudo dnf install -y docker; " +
+                    "elif command -v yum >/dev/null; then " +
+                        "sudo yum install -y docker; " +
+                    "fi",
+                    "sudo systemctl unmask docker || true",
+                    "sudo systemctl daemon-reload",
                     "sudo systemctl enable docker",
-                    "sudo systemctl start docker"
+                    "sudo systemctl start docker",
+                    "for user in ec2-user ubuntu admin $(whoami); do getent passwd $user >/dev/null && sudo usermod -aG docker $user; done"
                 };
             default:
                 return new String[]{"echo 'Unknown software request: " + software + "'"};

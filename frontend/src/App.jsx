@@ -300,31 +300,26 @@ export default function App() {
   };
 
   const removeFromStack = async (res) => {
+    // 1. Instant UI Update (Optimistic)
+    setResourceStack(prev => prev.filter(item => item.id !== res.id));
+
     try {
       const type = (res.serviceType || 'unknown').toLowerCase();
-      const name = res.bucketName || res.instanceName || res.appName || res.environmentName || res.name;
+      const name = res.pipelineName || res.instanceName || res.bucketName || res.appName || res.environmentName || res.vpcName || res.dbName || res.name;
       
       if (!name) return;
 
-      // Reconstruct module folder name (must match backend's folder structure exactly)
-      // Since we now preserve the raw name from the backend scan, we just use it directly
-      const safeName = name.toLowerCase(); 
+      const safeName = name.replaceAll(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
       const moduleName = `${type}_${safeName}`;
 
-      console.log(`Attempting physical deletion of module: ${moduleName} for org: ${orgName}`);
-
-      const response = await fetch(`http://localhost:8080/api/terraform/delete-module?moduleName=${moduleName}&orgName=${orgName || ''}`, {
+      await fetch(`http://localhost:8080/api/terraform/delete-module?moduleName=${moduleName}&orgName=${orgName || ''}`, {
         method: 'POST',
         headers: hdrs()
       });
       
-      if (!response.ok) {
-        console.warn("Backend failed to delete folder physically. Folder might not exist.");
-      }
-      
       await handleRefreshStack();
     } catch (err) {
-      console.error("Failed to physically delete module:", err);
+      console.error("Failed to delete module:", err);
     }
   };
 
